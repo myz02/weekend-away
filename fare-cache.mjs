@@ -1,17 +1,21 @@
 import {mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import {dirname} from 'node:path';
-import {setTimeout as sleep} from 'node:timers/promises';
-import {collect, places} from './live.mjs';
+import {collect, destinationAirports} from './live.mjs';
 import {runSearchBatch} from './search-batch.mjs';
 import {returnDate} from './dist/engine.js';
+import {originAirports} from './dist/destinations.js';
 import {nextShanghaiNoon, openTemporaryFares} from './temporary-fares.mjs';
 
-const origins = ['深圳', '上海', '北京', '广州', '杭州', '成都'];
-const destinations = ['厦门', '成都', '桂林', '重庆', '海口', '昆明', '大理', '青岛'];
+const origins = Object.keys(originAirports);
+const destinations = Object.keys(destinationAirports);
+const validLeg = (from, to) => from !== to && (
+  (Object.hasOwn(originAirports, from) && Object.hasOwn(destinationAirports, to)) ||
+  (Object.hasOwn(originAirports, to) && Object.hasOwn(destinationAirports, from))
+);
 const clock = new Intl.DateTimeFormat('sv-SE', {timeZone: 'Asia/Shanghai',
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23'});
 const legKey = (from, to, date) => [date, from, to].join('/');
-const coverageVersion = 2;
+const coverageKey = JSON.stringify([origins, Object.entries(destinationAirports).sort()]);
 
 export function cacheSchedule(now) {
   const [day, hour] = clock.format(now).split(' ');
@@ -28,23 +32,25 @@ export function cacheSchedule(now) {
 }
 
 function coverage(outbound) {
-  const legs = new Map();
+  const calls = new Map();
   for (const date of outbound) {
+    const back = returnDate(date);
+    const earliest = new Date(date + 'T12:00:00Z').getUTCDay() === 6 ? 7 : 21;
     for (const from of origins) {
       for (const to of destinations) {
         if (from === to) continue;
-        for (const leg of [[from, to, date, 21], [to, from, returnDate(date), 18]]) {
-          const [origin, destination, departure] = leg;
-          legs.set(legKey(origin, destination, departure), leg);
+        for (const [origin, destination, departure, hour] of [[from, to, date, earliest], [to, from, back, 18]]) {
+          const key = legKey(origin, destination, departure);
+          calls.set(key, [key, origin, destination, departure, hour]);
         }
       }
     }
   }
-  return legs;
+  return [...calls.values()];
 }
 
-export async function openFareCache(file, {fetchLeg = collect, now = () => new Date(), wait = sleep} = {}) {
-  const temporary = await openTemporaryFares(file + '.temporary', fetchLeg, now);
+export async function openFareCache(file, {fetchLeg = collect, now = () => new Date()} = {}) {
+  const temporary = await openTemporaryFares(file + '.temporary', fetchLeg, now, validLeg);
   let state = {day: null, updatedAt: null, legs: {}};
   try {
     const saved = JSON.parse(await readFile(file, 'utf8'));
@@ -54,53 +60,71 @@ export async function openFareCache(file, {fetchLeg = collect, now = () => new D
   }
   let refreshing = false;
   let progress = null;
+  let retryAt = null;
   const persist = async () => {
     await mkdir(dirname(file), {recursive: true});
     await writeFile(file + '.tmp', JSON.stringify(state));
     await rename(file + '.tmp', file);
   };
+  const today = cacheSchedule(now()).day;
+  const obsolete = Object.keys(state.legs).filter(key => {
+    const [date, from, to] = key.split('/');
+    return date < today || !validLeg(from, to);
+  });
+  if (obsolete.length) {
+    for (const key of obsolete) delete state.legs[key];
+    await persist();
+  }
+  await temporary.sweep();
 
   async function refresh() {
     await temporary.sweep();
     const schedule = cacheSchedule(now());
     const batch = schedule.due ? schedule.day : schedule.day + '-bootstrap';
-    const currentCoverage = state.coverageVersion === coverageVersion;
-    if (refreshing || (currentCoverage && (state.day === batch || (!schedule.due && state.day)))) return;
+    const currentCoverage = state.coverageKey === coverageKey;
+    if (refreshing || (retryAt && now().getTime() < Date.parse(retryAt)) ||
+        (currentCoverage && (state.day === batch || (!schedule.due && state.day)))) return;
     refreshing = true;
-    const legs = coverage(schedule.outbound);
-    progress = {done: 0, total: legs.size * 2};
+    retryAt = null;
+    const calls = coverage(schedule.outbound);
+    const existing = state.legs;
+    calls.sort(([a], [b]) => Number(Object.hasOwn(existing, a)) - Number(Object.hasOwn(existing, b)));
+    progress = {done: 0, total: calls.length};
     let pendingWrites = 0;
     let firstWrite = true;
     try {
-      for (const [key, [from, to, date, late]] of legs) {
-        for (const hour of [late, 0]) {
-          if (state.legs[key]?.[hour]?.day === batch) {
-            progress.done++;
-            continue;
-          }
-          let result;
-          try {
-            result = await fetchLeg(from, to, date, hour ? {depHour: hour} : {});
-          } catch (error) {
-            if (/限流|请求较频繁|429/.test(error.message)) await wait(60000);
-          }
-          if (result) {
-            state.legs[key] ??= {};
-            state.legs[key][hour] = {day: batch, result};
-            state.updatedAt = now().toISOString();
-            pendingWrites++;
-            if (firstWrite || pendingWrites >= 20) {
-              await persist();
-              pendingWrites = 0;
-              firstWrite = false;
-            }
-          }
+      for (const [key, from, to, date, hour] of calls) {
+        if (Object.entries(state.legs[key] || {}).some(([cachedHour, entry]) =>
+          Number(cachedHour) <= hour && entry.day === batch)) {
           progress.done++;
+          continue;
         }
+        let result;
+        try {
+          result = await fetchLeg(from, to, date, hour ? {depHour: hour} : {});
+        } catch (error) {
+          if (error.code === 'FLYAI_RATE_LIMIT') {
+            retryAt = new Date(now().getTime() + 5 * 60000).toISOString();
+            if (pendingWrites) await persist();
+            return;
+          }
+        }
+        if (result) {
+          state.legs[key] ??= {};
+          state.legs[key][hour] = {day: batch, result};
+          state.updatedAt = now().toISOString();
+          pendingWrites++;
+          if (firstWrite || pendingWrites >= 20) {
+            await persist();
+            pendingWrites = 0;
+            firstWrite = false;
+          }
+        }
+        progress.done++;
       }
       state.legs = Object.fromEntries(Object.entries(state.legs).filter(([key]) => key.slice(0, 10) >= schedule.day));
       state.day = batch;
-      state.coverageVersion = coverageVersion;
+      state.coverageKey = coverageKey;
       await persist();
     } finally {
       refreshing = false;
@@ -121,7 +145,7 @@ export async function openFareCache(file, {fetchLeg = collect, now = () => new D
     return {...entries.at(-1).result, flights: [...flights.values()]};
   }
 
-  const status = () => ({refreshing, progress, updatedAt: state.updatedAt, dates: cacheSchedule(now()).outbound});
+  const status = () => ({refreshing, progress, retryAt, updatedAt: state.updatedAt, dates: cacheSchedule(now()).outbound});
   return {
     refresh,
     status,
@@ -134,11 +158,18 @@ export async function openFareCache(file, {fetchLeg = collect, now = () => new D
         returnDate(query.outDate) === query.backDate;
       let usedOnDemand = false;
       const lookup = (from, to, date, filter) => {
-        if (!canFetch || state.legs[legKey(from, to, date)]) return cachedLeg(from, to, date);
+        const entries = state.legs[legKey(from, to, date)];
+        const hasCoverage = entries && Object.keys(entries).some(hour =>
+          filter.depHour === undefined || Number(hour) <= filter.depHour);
+        if (!canFetch || hasCoverage) return cachedLeg(from, to, date);
         usedOnDemand = true;
-        return temporary.get(from, to, date, filter);
+        return temporary.get(from, to, date, filter).catch(error => {
+          if (entries) return cachedLeg(from, to, date);
+          throw error;
+        });
       };
-      const results = Object.fromEntries([...new Set(query.destinations)].filter(city => Object.hasOwn(places, city))
+      const results = Object.fromEntries([...new Set(query.destinations)].filter(city =>
+        Object.hasOwn(originAirports, query.origin) && city !== query.origin && Object.hasOwn(destinationAirports, city))
         .map(city => [city, {city, status: 'queued'}]));
       const job = {status: 'queued', query: {...query, destinations: Object.keys(results)}, completed: 0, results};
       await runSearchBatch(job, {fetchLeg: lookup});

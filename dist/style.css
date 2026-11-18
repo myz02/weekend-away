@@ -4,7 +4,23 @@
 
 .city-art { background: #d5e1d8; height: auto; aspect-ratio: 16 / 9; }
 .city-art::before, .city-art::after { content: none; }
+.city-text-art { aspect-ratio: 16 / 5; background: #e6eeef; }
+.city-text-art[data-theme="海边"] { background: #dbecef; }
+.city-text-art[data-theme="山野"] { background: #e2ebde; }
+.city-text-art[data-theme="美食"] { background: #f2e8db; }
+.city-text-art .art-tag { inset: auto auto 14px 18px; background: transparent; }
+.destination-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+#city-search {
+  width: min(210px, 100%);
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  font: inherit;
+  color: var(--ink);
+}
 .city-image { display: block; width: 100%; height: 100%; object-fit: cover; }
+.city-image[src="images/qingdao.webp"] { object-position: center top; }
 .live-card { display: flex; flex-direction: column; }
 .live-card:hover { transform: none; }
 .live-card .city-art { flex-shrink: 0; }
@@ -72,6 +88,7 @@ header, main, footer { width: min(1240px, calc(100% - 64px)); margin-inline: aut
 }
 .hero-image, .hero::after { position: absolute; inset: 0; width: 100%; height: 100%; }
 .hero-image { z-index: -2; object-fit: cover; object-position: center 49%; }
+.hero-image[src="images/qingdao.webp"] { object-position: center top; }
 .hero::after {
   content: '';
   z-index: -1;
@@ -122,6 +139,81 @@ header, main, footer { width: min(1240px, calc(100% - 64px)); margin-inline: aut
   font-size: 16px;
 }
 .search-fields output { color: var(--teal); font-size: 15px; font-variant-numeric: tabular-nums; }
+.departure-field { position: relative; }
+#departure-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+#departure-trigger svg { flex: none; color: var(--teal); }
+#departure-calendar {
+  position: absolute;
+  inset-block-start: calc(100% + 8px);
+  inset-inline-start: 0;
+  z-index: 12;
+  width: min(294px, calc(100vw - 44px));
+  padding: 12px;
+  border: 1px solid #dce9e6;
+  border-radius: 18px;
+  background: #fbfdfc;
+  color: var(--ink);
+  box-shadow: 0 14px 34px #183d4a24;
+}
+.calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.calendar-weekdays, #calendar-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+  text-align: center;
+}
+.calendar-weekdays {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+#departure-calendar button {
+  display: grid;
+  place-items: center;
+  min-height: 33px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #e8f3ef;
+  color: var(--teal);
+  font-size: 13px;
+  font-weight: 650;
+}
+.calendar-header button { width: 33px; }
+#departure-calendar button:hover:enabled { background: #cfe7df; }
+#departure-calendar button:disabled { opacity: .52; background: transparent; color: var(--muted); }
+#departure-calendar button[aria-pressed="true"] { background: var(--teal); color: white; }
+#departure-calendar button[aria-pressed="true"]:hover:enabled { background: #0b5243; }
+#departure-calendar button:focus-visible, #departure-trigger:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+@media (max-width: 580px) {
+  #departure-trigger { font-size: 14px; }
+  #departure-calendar { inset-inline: auto 0; }
+}
 .search-fields input[type=range] { margin: 9px 0 0; accent-color: var(--teal); }
 .primary { background: var(--teal); color: #fff; border-radius: 10px; font-weight: 700; }
 .primary:hover { background: #0b5243; }
@@ -166,6 +258,36 @@ header, main, footer { width: min(1240px, calc(100% - 64px)); margin-inline: aut
 .outline:hover { background: var(--soft-teal); }
 .muted { color: var(--muted); }
 dialog { border-radius: 20px; background: #fbfdfc; box-shadow: 0 20px 66px #12364145; }
+#trip-dialog {
+  --trip-padding: 35px;
+  padding: 0;
+  overflow: hidden;
+}
+#trip-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.trip-dialog-header {
+  position: relative;
+  flex: none;
+  padding: var(--trip-padding) var(--trip-padding) 12px;
+  border-bottom: 1px solid var(--line);
+}
+#trip-heading {
+  padding-inline-end: 30px;
+}
+#trip-heading > :last-child {
+  margin-bottom: 0;
+}
+#trip-content {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 var(--trip-padding) var(--trip-padding);
+}
+@media (max-width: 580px) {
+  #trip-dialog { --trip-padding: 20px; }
+}
 dialog::backdrop { background: #0b293879; }
 .trip-summary { background: #eaf4f0; border-radius: 12px; }
 .flight-breakdown { border-color: #c7ded7; }

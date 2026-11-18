@@ -91,7 +91,13 @@ test('套餐入口仅使用两段航班均匹配的飞猪官方链接', async ()
   assert.equal(matchRoundTripLink([matching], {...query, backTime: '18:01'}), null);
   assert.equal(matchRoundTripLink([{...matching, jumpUrl: 'https://fliggy.com.example.org/'}], query), null);
   assert.equal(matchRoundTripLink([matching], query), officialUrl);
-  assert.equal(await roundTripBookingUrl(query, async () => ({items: [matching]})), officialUrl);
+  assert.equal(await roundTripBookingUrl(query, async (_origin, _destination, _date, options) => {
+    assert.deepEqual(options, ['--back-date', query.backDate, '--transport-no', query.outFlight + ',' + query.backFlight]);
+    return {items: [matching]};
+  }), officialUrl);
+  assert.equal(await roundTripBookingUrl(query, async (_origin, _destination, _date, options) => ({
+    items: options.includes('--transport-no') ? [] : [matching],
+  })), officialUrl);
 });
 
 test('飞猪报价异常或缺少所选组合时仍打开同线路同日期的往返搜索', async () => {

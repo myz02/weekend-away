@@ -1,10 +1,36 @@
 import {spaceRequestStarts} from './request-spacing.mjs';
+import {destinations, originAirports} from './dist/destinations.js';
 import { estimateDomesticFees, roundMoney } from './fees.mjs';
 import {execFile} from 'node:child_process';import {promisify} from 'node:util';import {fileURLToPath} from 'node:url';
 const exec=promisify(execFile),cli=fileURLToPath(new URL('./node_modules/@fly-ai/flyai-cli/dist/flyai-bundle.cjs',import.meta.url));
 const launchSearch = spaceRequestStarts(1800);
+const rateLimitPattern = /429|rate limit|risk control|限流/i;
+let cooldownUntil = 0;
+
+function rateLimitError() {
+  return Object.assign(Error(friendlyError('429')), {
+    code: 'FLYAI_RATE_LIMIT',
+    retryAt: new Date(cooldownUntil).toISOString(),
+  });
+}
+
+function quoteError(error) {
+  const raw = String(error?.stderr || error?.message || error);
+  if (rateLimitPattern.test(raw)) {
+    cooldownUntil = Date.now() + 60000;
+    return rateLimitError();
+  }
+  return Error(friendlyError(error));
+}
 export function friendlyError(error){const text=String(error?.stderr||error?.message||error);if(/429|rate limit|risk control|限流/i.test(text))return '飞猪体验通道请求较频繁，请稍后重新查询；其他成功报价已保留';if(/401|403|api.?key|unauthorized/i.test(text))return '飞猪体验通道要求授权，本次未取得价格';if(/timeout|timed out|ETIMEDOUT/i.test(text))return '飞猪查询超时，请稍后重试';return '飞猪暂未返回可用报价，请稍后重试或在飞猪核价'}
-export const places={深圳:'SZX',上海:'SHA',北京:'BJS',广州:'CAN',杭州:'HGH',成都:'CTU',厦门:'XMN',桂林:'KWL',重庆:'CKG',海口:'HAK',昆明:'KMG',大理:'DLU',青岛:'TAO'};
+export const destinationAirports = Object.fromEntries(destinations.filter(city => city.airport).map(city => [city.city, city.airport]));
+export const places = {...originAirports, ...destinationAirports};
+// These destinations are marketed under a regional name or served by a nearby city.
+const airportSearchCities = new Set(['金华', '嘉兴', '西双版纳', '香格里拉', '九寨沟', '潮汕', '呼伦贝尔', '长白山']);
+const flyQuery = city => airportSearchCities.has(city) ? places[city] : city;
+const matchesCity = (city, returnedName, station) => airportSearchCities.has(city)
+  ? station === places[city]
+  : returnedName === city;
 const flightSearchPage = 'https://sjipiao.fliggy.com/flight_search_result.htm?';
 export function searchUrl(origin, destination, date) {
   return flightSearchPage + new URLSearchParams({
@@ -24,7 +50,8 @@ export function normalizeItems(items, { origin, destination, date, url, collecte
   for (const item of items) {
     if (item.journeys?.length !== 1 || item.journeys[0].segments?.length !== 1) continue;
     const s = item.journeys[0].segments[0];
-    if (s.depCityName !== origin || s.arrCityName !== destination || s.depDateTime?.slice(0, 10) !== date ||
+    if (!matchesCity(origin, s.depCityName, s.depStationCode) ||
+        !matchesCity(destination, s.arrCityName, s.arrStationCode) || s.depDateTime?.slice(0, 10) !== date ||
         s.seatClassName !== '经济舱' || s.stopInfos?.length) continue;
     // The current FlyAI response supplies the base fare without a tax breakdown.
     const raw = item.ticketPrice ?? item.adultPrice;
@@ -60,23 +87,26 @@ export function normalizeItems(items, { origin, destination, date, url, collecte
   return flights;
 }
 async function fetchFlights(origin, destination, date, options, timeout = 60000) {
-  const args = [cli, 'search-flight', '--origin', origin, '--destination', destination,
+  if (Date.now() < cooldownUntil) throw rateLimitError();
+  const args = [cli, 'search-flight', '--origin', flyQuery(origin), '--destination', flyQuery(destination),
     '--dep-date', date, '--journey-type', '1', '--seat-class-name', '经济舱', '--sort-type', '3', ...options];
-  let stdout;
-  try {
-    ({stdout} = await launchSearch(() => exec(process.execPath, args, {
-      timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true,
-    })));
-  } catch (error) {
-    throw Error(friendlyError(error));
-  }
-  let result;
-  try {
-    result = JSON.parse(stdout.trim());
-  } catch {
-    throw Error('FlyAI 返回格式异常，未显示任何价格');
-  }
-  if (result.status !== 0) throw Error(friendlyError(result.message || 'FlyAI 查询失败'));
+  const result = await launchSearch(async () => {
+    if (Date.now() < cooldownUntil) throw rateLimitError();
+    let stdout;
+    try {
+      ({stdout} = await exec(process.execPath, args, {timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true}));
+    } catch (error) {
+      throw quoteError(error);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(stdout.trim());
+    } catch {
+      throw Error('FlyAI 返回格式异常，未显示任何价格');
+    }
+    if (parsed.status !== 0) throw quoteError(`${parsed.status} ${parsed.message || 'FlyAI 查询失败'}`);
+    return parsed;
+  });
   const items = result.data?.itemList;
   if (!Array.isArray(items)) throw Error('FlyAI 未返回航班列表');
   return {items, notice: result.systemMessage || ''};
@@ -104,7 +134,8 @@ export function matchRoundTripLink(items, {origin, destination, outDate, backDat
       const segments = item.journeys[index]?.segments;
       if (segments?.length !== 1) return false;
       const flight = segments[0];
-      return flight.depCityName === from && flight.arrCityName === to &&
+      return matchesCity(from, flight.depCityName, flight.depStationCode) &&
+        matchesCity(to, flight.arrCityName, flight.arrStationCode) &&
         flight.marketingTransportNo === number && flight.seatClassName === '经济舱' &&
         !flight.stopInfos?.length && flight.depStationCode === dep && flight.arrStationCode === arr &&
         flight.depDateTime?.slice(0, 16) === departure;
@@ -118,18 +149,30 @@ export function matchRoundTripLink(items, {origin, destination, outDate, backDat
   return null;
 }
 
-export async function roundTripBookingUrl(query, lookup = fetchFlights) {
+export async function resolveRoundTripBooking(query, lookup = fetchFlights) {
   const {origin, destination, outDate, backDate, outFlight, backFlight} = query;
+  const searchUrl = roundTripSearchUrl(origin, destination, outDate, backDate);
   try {
     const {items} = await lookup(origin, destination, outDate,
       ['--back-date', backDate, '--transport-no', outFlight + ',' + backFlight], 12000);
-    const booking = matchRoundTripLink(items, query);
-    if (booking) return booking;
-  } catch {
-    // The carrier pairing may be unsupported, or the quote service may be unavailable.
-    // Keep the requested route and dates usable through the public round-trip search.
+    let bookingUrl = matchRoundTripLink(items, query);
+    if (!bookingUrl) {
+      const {items: nearby} = await lookup(origin, destination, outDate,
+        ['--back-date', backDate, '--dep-hour-start', query.outTime.slice(0, 2)], 12000);
+      bookingUrl = matchRoundTripLink(nearby, query);
+    }
+    return {bookingUrl, searchUrl, status: bookingUrl ? 'matched' : 'no_match'};
+  } catch (error) {
+    if (error.code === 'FLYAI_RATE_LIMIT') {
+      return {bookingUrl: null, searchUrl, status: 'rate_limited', retryAt: error.retryAt};
+    }
+    return {bookingUrl: null, searchUrl, status: 'unavailable', message: error.message};
   }
-  return roundTripSearchUrl(origin, destination, outDate, backDate);
+}
+
+export async function roundTripBookingUrl(query, lookup = fetchFlights) {
+  const result = await resolveRoundTripBooking(query, lookup);
+  return result.bookingUrl || result.searchUrl;
 }
 
 const mins=t=>{const [h,m]=t.split(':').map(Number);return h*60+m};

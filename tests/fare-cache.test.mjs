@@ -17,6 +17,25 @@ test('北京时间中午启动每日采集，覆盖当月与下月且支持跨�
   assert.equal(december.at(-1), '2027-01-30');
 });
 
+test('启动时清理已移除城市的去返缓存和临时缓存，保留其他城市', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'weekend-catalog-'));
+  t.after(() => rm(dir, {recursive: true, force: true}));
+  const file = join(dir, 'fares.json');
+  const current = '2026-11-20/深圳/张家界';
+  const validTemp = JSON.stringify(['张家界', '深圳', '2026-11-22', 18, null]);
+  const removedTemp = JSON.stringify(['旧目的地', '深圳', '2026-11-22', 18, null]);
+  const expiresAt = '2026-11-19T04:00:00.000Z';
+  await writeFile(file, JSON.stringify({legs: {
+    [current]: {},
+    '2026-11-20/深圳/旧目的地': {},
+    '2026-11-22/旧目的地/深圳': {},
+  }}));
+  await writeFile(file + '.temporary', JSON.stringify({[validTemp]: {expiresAt}, [removedTemp]: {expiresAt}}));
+  await openFareCache(file, {now: () => new Date('2026-11-18T04:00:00Z')});
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(file, 'utf8')).legs), [current]);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(file + '.temporary', 'utf8'))), [validTemp]);
+});
+
 test('每批次覆盖站点航线，重复查询及重启只读缓存，失败时保留已有报价', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'weekend-fares-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
@@ -30,15 +49,17 @@ test('每批次覆盖站点航线，重复查询及重启只读缓存，失败�
   };
   const cache = await openFareCache(file, {now: () => time, fetchLeg});
   await cache.refresh();
-  assert.equal(calls.length, 1692);
+  assert.equal(calls.length, cache.status().progress.total);
   assert(calls.some(([from, to, date, hour]) => from === '青岛' && to === '杭州' && date === '2026-11-22' && hour === 18));
-  assert(calls.some(([from, to, date, hour]) => from === '深圳' && to === '厦门' && date === '2026-11-21' && hour === 21));
-  assert(calls.some(([from, to, date, hour]) => from === '深圳' && to === '厦门' && date === '2026-12-26' && hour === 21));
+  assert(calls.some(([from, to, date, hour]) => from === '深圳' && to === '张家界' && date === '2026-11-20' && hour === 21));
+  assert(calls.some(([from, to, date, hour]) => from === '深圳' && to === '厦门' && date === '2026-11-21' && hour === 7));
+  assert(calls.some(([from, to, date, hour]) => from === '深圳' && to === '厦门' && date === '2026-12-26' && hour === 7));
+  const initialCalls = calls.length;
   const query = {origin: '深圳', destinations: ['厦门'], outDate: '2026-11-28',
     backDate: '2026-11-29', earliest: '21:00', returnEarliest: '18:00'};
   await cache.refresh();
   assert.equal((await cache.search(query)).results['厦门'].status, 'no_match');
-  assert.equal(calls.length, 1692);
+  assert.equal(calls.length, initialCalls);
 
   time = new Date('2026-11-19T04:00:00Z');
   const restarted = await openFareCache(file, {now: () => time, fetchLeg: async () => { throw Error('超时'); }});

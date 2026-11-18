@@ -8,7 +8,7 @@ export function nextShanghaiNoon(now) {
   return noon.toISOString();
 }
 
-export async function openTemporaryFares(file, fetchLeg, now) {
+export async function openTemporaryFares(file, fetchLeg, now, validLeg) {
   let entries = {};
   try {
     const saved = JSON.parse(await readFile(file, 'utf8'));
@@ -34,7 +34,15 @@ export async function openTemporaryFares(file, fetchLeg, now) {
 
   async function sweep() {
     const time = now().toISOString();
-    const expired = Object.keys(entries).filter(key => entries[key].expiresAt <= time);
+    const expired = Object.keys(entries).filter(key => {
+      if (entries[key].expiresAt <= time) return true;
+      try {
+        const [from, to] = JSON.parse(key);
+        return !validLeg(from, to);
+      } catch {
+        return true;
+      }
+    });
     if (!expired.length) return;
     for (const key of expired) delete entries[key];
     await persist();

@@ -1,22 +1,33 @@
 import {returnDate, weekend} from './engine.js';
 import {plansWithinBudget} from './budget.js';
+import {syncDepartureCalendar} from './departure-calendar.js';
+import {destinations as cities} from './destinations.js';
 
 document.documentElement.dataset.live = '1';
 
 const $ = selector => document.querySelector(selector);
 const money = amount => '¥' + amount.toLocaleString('zh-CN', {maximumFractionDigits: 2});
-const cities = [
-  ['xiamen', '厦门', '海边', '厦门双子塔', '两座帆形大楼立在海边，傍晚能一起看到海湾和城市灯火。'],
-  ['chengdu', '成都', '美食', '大熊猫繁育基地', '在熊猫基地看大熊猫抱着竹子吃。'],
-  ['guilin', '桂林', '山野', '兴坪漓江', '从高处俯瞰，漓江绕过兴坪村落，峰林一层层延伸到远处。'],
-  ['chongqing', '重庆', '美食', '洪崖洞夜景', '从千厮门大桥望过去，嘉陵江边的吊脚楼层层亮起。'],
-  ['haikou', '海口', '海边', '假日海滩', '从秀英港远眺，碧蓝的海水沿着海口西海岸铺开。'],
-  ['kunming', '昆明', '山野', '滇池红嘴鸥', '冬天到滇池大堤，看红嘴鸥贴着水面飞。'],
-  ['dali', '大理', '山野', '崇圣寺三塔', '认准一高两低的三座白塔，背后就是苍山。'],
-  ['qingdao', '青岛', '海边', '浮山湾夜景', '夜里沿浮山湾散步，五四广场一带的楼群在海面映出灯影。'],
-].map(([id, city, tag, landmark, caption]) => ({id, city, tag, landmark, caption}));
+function chooseHeroDestination() {
+  let previous;
+  try { previous = sessionStorage.getItem('weekend-hero'); } catch {}
+  const choices = cities.filter(city => city.hasPhoto && city.id !== previous);
+  const destination = choices[Math.floor(Math.random() * choices.length)];
+  const image = $('.hero-image');
+  const label = destination.city + ' · ' + destination.photoSubject;
+  if (destination.id !== 'guilin') {
+    image.removeAttribute('srcset');
+    image.removeAttribute('sizes');
+    image.src = 'images/' + destination.id + '.webp';
+  }
+  image.alt = label;
+  $('.hero-location').textContent = label;
+  try { sessionStorage.setItem('weekend-hero', destination.id); } catch {}
+}
+
+chooseHeroDestination();
 
 let job = null, tag = '全部', saved = false, busy = false, available = false;
+let hasSearched = false;
 let appliedBudget = null;
 let coveredDates = [];
 let favorites = readFavorites();
@@ -38,6 +49,10 @@ const noteText = $('.data-note');
 const queryDetails = $('#query-details');
 const empty = $('#empty');
 const budget = () => Number($('#budget').value);
+function matchesCityKeyword(city) {
+  const keyword = $('#city-search').value.trim().toLowerCase();
+  return [city.city, city.landmark, city.id, city.airport].some(value => value?.toLowerCase().includes(keyword));
+}
 const statusText = result => ({
   queued: '等待查询', running: '查询去程 / 返程中', error: '未取得报价',
   no_match: '无可组合航班', success: '已获取航班',
@@ -65,10 +80,16 @@ function addPlanPrice(body, plan, result) {
 function createCard(city, plans, result) {
   const card = make('article', 'card live-card');
   const art = make('div', 'art city-art');
-  const image = make('img', 'city-image');
-  image.src = 'images/' + city.id + '.webp';
-  image.alt = city.city + ' · ' + city.landmark;
-  image.loading = 'lazy';
+  if (city.hasPhoto) {
+    const image = make('img', 'city-image');
+    image.src = 'images/' + city.id + '.webp';
+    image.alt = city.city + ' · ' + city.photoSubject;
+    image.loading = 'lazy';
+    art.append(image);
+  } else {
+    art.classList.add('city-text-art');
+    art.dataset.theme = city.tag;
+  }
   const favorited = favorites.includes(city.id);
   const favorite = make('button', 'save' + (favorited ? ' saved' : ''), favorited ? '♥' : '♡');
   favorite.type = 'button';
@@ -80,7 +101,7 @@ function createCard(city, plans, result) {
     window.dispatchEvent(new CustomEvent('live-favorites-changed', {detail: favorites}));
     render();
   };
-  art.append(image, make('span', 'art-tag', city.landmark), favorite);
+  art.append(make('span', 'art-tag', city.hasPhoto ? city.photoSubject : city.landmark), favorite);
   const body = make('div', 'card-body');
   body.append(make('h3', '', city.city), make('p', 'city-caption', city.caption));
   if (plans.length) {
@@ -111,6 +132,7 @@ function renderQueryDetails() {
 }
 
 function render() {
+  syncDepartureCalendar();
   if (job?.temporaryExpiresAt && Date.parse(job.temporaryExpiresAt) <= Date.now()) {
     job = null;
     appliedBudget = null;
@@ -119,7 +141,8 @@ function render() {
   }
   const origin = $('#origin').value;
   const limit = appliedBudget ?? Infinity;
-  const candidateCities = cities.filter(city => city.city !== origin
+  const candidateCities = cities.filter(city => (!job || city.city !== origin)
+    && matchesCityKeyword(city)
     && (tag === '全部' || city.tag === tag || (tag === '城市' && ['成都', '重庆', '昆明', '青岛', '厦门'].includes(city.city)))
     && (!saved || favorites.includes(city.id)));
   const entries = candidateCities.map(city => {
@@ -131,12 +154,17 @@ function render() {
   }
   $('#budget-value').textContent = money(budget());
   $('#fav-count').textContent = favorites.length;
+  $('#sort').hidden = !job;
+  if (!busy) {
+    $('.search-submit').textContent = $('#city-search').value.trim() ? '查询匹配目的地 ↗' : '查询全部目的地 ↗';
+  }
   $('#section-title').textContent = saved ? '收藏目的地' : appliedBudget !== null ? '预算内目的地' : '这周末，去这里';
   const date = $('#departure').value;
   const dateRange = date ? date + ' — ' + returnDate(date) : '请选择出发日期';
   const progress = appliedBudget !== null
     ? `${entries.length} 个目的地符合已查询预算 ${money(limit)}`
-    : '全部目的地 · 点击查询后按预算和起飞时间筛选';
+    : job ? '已按起飞时间筛选 · 点击查询应用往返预算'
+      : `浏览 ${entries.length} 个目的地 · 点击查询查看往返航班和票价`;
   $('#result-summary').textContent = `${origin}出发 · ${dateRange} · ${progress}`;
   $('#cards').replaceChildren(...entries.map(({city, plans, result}) => createCard(city, plans, result)));
   empty.hidden = entries.length > 0;
@@ -170,12 +198,48 @@ function roundTripBooking(destination, {origin, outDate, backDate}, {outbound, i
     outFlight: outbound.number, backFlight: inbound.number,
     outTime: outbound.departureTime, backTime: inbound.departureTime,
     depAirport: outbound.depAirportCode, arrAirport: outbound.arrAirportCode,
+    resolve: '1',
   });
-  const anchor = make('a', 'detail round-trip-search', '去飞猪选票价套餐 ↗');
-  anchor.href = '/api/round-trip?' + params;
-  anchor.target = '_blank';
-  anchor.rel = 'noopener noreferrer';
-  return anchor;
+  const actions = make('div', '');
+  const button = make('button', 'detail round-trip-search', '去飞猪选票价套餐 ↗');
+  button.type = 'button';
+  const status = make('p', 'muted');
+  status.setAttribute('role', 'status');
+  const search = make('a', 'detail round-trip-search', '去飞猪搜索往返 ↗');
+  search.target = '_blank';
+  search.rel = 'noopener noreferrer';
+  search.hidden = true;
+  actions.append(button, status, search);
+  button.onclick = async () => {
+    button.disabled = true;
+    search.hidden = true;
+    status.textContent = '正在核对飞猪往返套餐…';
+    try {
+      const response = await fetch('/api/round-trip?' + params, {cache: 'no-store'});
+      if (!response.ok) throw Error('暂时无法核对套餐，请重试。');
+      const result = await response.json();
+      if (!actions.isConnected || !$('#trip-dialog').open) return;
+      if (result.status === 'matched' && result.bookingUrl) {
+        status.textContent = '已找到对应套餐，正在打开飞猪…';
+        window.location.assign(result.bookingUrl);
+        return;
+      }
+      if (result.status === 'rate_limited') {
+        status.textContent = `飞猪暂时限制套餐查询。建议北京时间 ${fareTime(result.retryAt)} 后重试，也可以现在打开飞猪往返搜索。`;
+      } else {
+        status.textContent = result.status === 'no_match'
+          ? '飞猪未返回这两班对应的套餐。可打开往返搜索页按航班号查找。'
+          : (result.message || '飞猪套餐暂时无法核对，可稍后重试。');
+      }
+      search.href = result.searchUrl;
+      search.hidden = false;
+    } catch {
+      status.textContent = '暂时无法核对套餐，请重试。';
+    } finally {
+      button.disabled = false;
+    }
+  };
+  return actions;
 }
 
 function showPlans(city, result) {
@@ -186,12 +250,15 @@ function showPlans(city, result) {
   const box = $('#trip-content');
   const {origin} = job.query;
   const plans = plansWithinBudget(result, appliedBudget ?? Infinity);
-  box.replaceChildren(
-    make('h2', '', origin + ' ↔ ' + city.city),
+  const title = make('h2', '', origin + ' ↔ ' + city.city);
+  title.id = 'trip-title';
+  $('#trip-heading').replaceChildren(
+    title,
     make('p', 'muted', appliedBudget === null ? '成人 1 人'
       : `往返预算 ${money(appliedBudget)} · 成人 1 人`),
-    make('p', 'muted', '价格按两段单程报价估算，以飞猪往返订单为准。若飞猪未返回所选组合，将打开同路线、同日期的往返搜索。'),
+    make('p', 'muted', '价格以飞猪往返订单为准。找到与所选两班匹配的套餐后会直接打开。'),
   );
+  box.replaceChildren();
   for (const [index, plan] of plans.entries()) {
     const row = make('div', 'trip-summary');
     row.append(
@@ -203,14 +270,19 @@ function showPlans(city, result) {
     box.append(row);
   }
   box.append(make('p', 'muted', '采集时间 ' + fareTime(result.collectedAt)));
-  $('#trip-dialog').showModal();
+  const dialog = $('#trip-dialog');
+  dialog.setAttribute('aria-labelledby', title.id);
+  dialog.showModal();
+  box.scrollTop = 0;
 }
 
 function lock(value) {
   busy = value;
+  $('#departure-trigger').disabled = value;
   for (const id of ['origin', 'departure', 'departure-day', 'earliest', 'return-earliest']) $('#' + id).disabled = value;
   $('.search-submit').disabled = value;
-  $('.search-submit').textContent = value ? '正在读取缓存…' : '查询全部目的地 ↗';
+  $('.search-submit').textContent = value ? '正在读取缓存…'
+    : $('#city-search').value.trim() ? '查询匹配目的地 ↗' : '查询全部目的地 ↗';
 }
 
 function fareTime(value) {
@@ -230,6 +302,10 @@ function showCacheStatus(cache, date, temporaryExpiresAt) {
     noteText.textContent = '所选日期暂无报价。';
     return;
   }
+  if (cache.refreshing && job?.query.cacheOnly && Object.values(job.results).some(result => result.status === 'error')) {
+    noteText.textContent = '部分航线仍在采集。已有报价会显示在下方，也可以手动查询补充。';
+    return;
+  }
   noteText.textContent = '';
 }
 
@@ -241,13 +317,22 @@ async function loadFares(limit) {
   }
   const origin = $('#origin').value;
   const outDate = $('#departure').value;
+  const earliest = $('#earliest').value;
+  const returnEarliest = $('#return-earliest').value;
+  if (!outDate || !earliest || !returnEarliest) {
+    noteText.textContent = '请填写出发日期、去程和返程最早起飞时间。';
+    return;
+  }
   const query = {
     origin, outDate, backDate: returnDate(outDate),
     cacheOnly: limit === null,
-    earliest: limit === null ? '00:00' : $('#earliest').value,
-    returnEarliest: limit === null ? '00:00' : $('#return-earliest').value,
-    destinations: cities.filter(city => city.city !== origin).map(city => city.city),
+    earliest, returnEarliest,
+    destinations: cities.filter(city => city.airport && city.city !== origin && matchesCityKeyword(city)).map(city => city.city),
   };
+  if (!query.destinations.length) {
+    noteText.textContent = '当前搜索没有可查询的直飞机票目的地，请更换搜索词。';
+    return;
+  }
   lock(true);
   if (limit !== null) {
     $('.search-submit').textContent = '正在查询报价…';
@@ -260,6 +345,7 @@ async function loadFares(limit) {
     const data = await response.json();
     if (!response.ok) throw Error(data.error || '查询未能启动');
     job = data;
+    hasSearched = true;
     appliedBudget = limit;
     showCacheStatus(data.cache, outDate, data.temporaryExpiresAt);
     if (limit !== null && !data.temporaryExpiresAt && Object.values(job.results).some(result => result.status === 'success')) {
@@ -279,10 +365,25 @@ $('#search-form').onsubmit = event => {
 };
 
 for (const id of ['origin', 'departure', 'departure-day', 'earliest', 'return-earliest']) {
-  $('#' + id).addEventListener('change', () => { job = null; appliedBudget = null; render(); });
+  $('#' + id).addEventListener('change', () => {
+    job = null;
+    appliedBudget = null;
+    render();
+    if (hasSearched && $('#departure').value) void loadFares(null);
+  });
 }
 $('#budget').oninput = () => { $('#budget-value').textContent = money(budget()); };
 $('#sort').onchange = render;
+$('#city-search').oninput = () => {
+  if (!job && !busy) noteText.textContent = '';
+  render();
+};
+$('#city-search').onkeydown = event => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    $('#search-form').requestSubmit();
+  }
+};
 $('#direct').checked = true;
 $('#direct').disabled = true;
 $('#chips').onclick = event => {
@@ -303,6 +404,7 @@ $('#favorites').onclick = () => setSaved(true);
 $('#reset').onclick = () => {
   tag = '全部';
   $('#budget').value = 1200;
+  $('#city-search').value = '';
   appliedBudget = null;
   document.querySelectorAll('[data-tag]').forEach(item => item.classList.toggle('selected', item.dataset.tag === tag));
   setSaved(false);
@@ -342,5 +444,4 @@ try {
     render();
   }
 } catch {}
-if (available) void loadFares(null);
 setInterval(render, 60000);

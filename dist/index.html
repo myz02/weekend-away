@@ -30,9 +30,28 @@
         <label class="search-field"><span class="field-label">出发城市</span>
           <select id="origin"><option>深圳</option><option>上海</option><option>北京</option><option>广州</option><option>杭州</option><option>成都</option></select>
         </label>
-        <label class="search-field"><span class="field-label">出发日期</span>
-          <input id="departure" type="date" required>
-        </label>
+        <div class="search-field departure-field">
+          <span class="field-label" id="departure-label">出发日期</span>
+          <input id="departure" type="date" hidden>
+          <button type="button" id="departure-trigger" aria-labelledby="departure-label departure-display"
+            aria-controls="departure-calendar" aria-expanded="false">
+            <span id="departure-display">选择日期</span>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+              <rect x="4" y="6" width="16" height="14" rx="3"/><path d="M8 4v4m8-4v4M4 11h16" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <div id="departure-calendar" aria-label="出发日期日历" role="group" hidden>
+            <div class="calendar-header">
+              <button type="button" id="calendar-prev" aria-label="上个月">‹</button>
+              <span id="calendar-month" aria-live="polite"></span>
+              <button type="button" id="calendar-next" aria-label="下个月">›</button>
+            </div>
+            <div class="calendar-weekdays" aria-hidden="true">
+              <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+            </div>
+            <div id="calendar-days"></div>
+          </div>
+        </div>
         <label class="search-field budget-field"><span class="field-label">往返预算（含机建燃油）</span>
           <output id="budget-value" for="budget">¥1,200</output><input id="budget" type="range" min="400" max="3000" step="100" value="1200">
         </label>
@@ -48,9 +67,12 @@
 
     <section class="results-head">
       <div><h2 id="section-title">这周末，去这里</h2><p id="result-summary"></p></div>
-      <select id="sort" aria-label="排序"><option value="recommended">推荐优先</option><option value="price">往返含费总价从低到高</option><option value="duration">飞行时间最短</option></select>
+      <div class="destination-controls">
+        <input id="city-search" type="search" aria-label="搜索目的地" placeholder="搜索城市或地标">
+        <select id="sort" aria-label="排序"><option value="recommended">推荐优先</option><option value="price">往返含费总价从低到高</option><option value="duration">飞行时间最短</option></select>
+      </div>
     </section>
-    <div class="data-note" role="status">正在加载票价缓存</div>
+    <div class="data-note" role="status"></div>
     <div class="chips" id="chips">
       <button class="selected" data-tag="全部">全部目的地</button><button data-tag="海边">海边</button><button data-tag="美食">美食</button><button data-tag="山野">山野</button><button data-tag="城市">城市漫游</button>
     </div>
@@ -70,7 +92,13 @@
     <p>报价由飞猪 FlyAI 提供</p>
     <a class="city-photo-credit" href="images/credits.html">照片来源与许可</a>
   </footer>
-  <dialog id="trip-dialog"><button class="close" data-close="trip-dialog" aria-label="关闭详情">×</button><div id="trip-content"></div></dialog>
+  <dialog id="trip-dialog">
+    <div class="trip-dialog-header">
+      <button type="button" class="close" data-close="trip-dialog" aria-label="关闭详情">×</button>
+      <div id="trip-heading"></div>
+    </div>
+    <div id="trip-content"></div>
+  </dialog>
   <div id="toast" role="status"></div>
   <script type="module" src="app.js"></script>
 </body>

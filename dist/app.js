@@ -47,6 +47,9 @@ $('#reset').onclick=()=>{tag='全部';$('#budget').value=1200;$('#earliest').val
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.dataset.close).close());
 for (const id of ['departure', 'departure-day']) {
   $('#' + id).onchange = () => {
+    if (id === 'departure-day') {
+      $('#earliest').value = $('#departure-day').value === '6' ? '07:00' : '21:00';
+    }
     syncDepartureDate();
     if (document.documentElement.dataset.live !== '1') render();
   };
