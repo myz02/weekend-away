@@ -1,13 +1,77 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="用一个周末，换一种生活节奏。按时间和预算筛选出游方案。"><title>周末出逃 · 不请假的小旅行</title><link rel="stylesheet" href="style.css"></head>
-<body><header><a class="brand" href="#">↗ <span>周末出逃<small>WEEKEND, SOMEWHERE.</small></span></a><nav><button id="discover" class="nav active">发现目的地</button><button id="favorites" class="nav">我的收藏 <span id="fav-count">0</span></button></nav><span class="header-note">留两天，给自己。</span></header>
-<main><section class="hero"><div><p class="eyebrow">SMALL BUDGET. BIG WEEKEND.</p><h1>周一之前，<br>去别处生活一下<span>。</span></h1><p class="lead">周五下班就走，周日及时回来。<br>不请假，也能有一场刚刚好的旅行。</p><div class="hero-tags"><span>↗ 周末往返</span><span>◷ 时间刚刚好</span><span>¥ 预算心里有数</span></div></div><div class="poster" aria-hidden="true"><span class="poster-index">BOARDING PASS / 002</span><div class="sun"></div><div class="mountain back"></div><div class="mountain front"></div><div class="sea"></div><div class="ticket"><span>本周末的目的地</span><strong>换个地方<br>发发呆。</strong><div>FRI → SUN <b>↗</b></div></div><span class="poster-caption">THE WORLD CAN WAIT. YOUR WEEKEND CAN’T.</span></div></section>
-<form id="search-form" class="search-box"><div class="search-fields"><label>从哪里出发<select id="origin"><option>深圳</option><option>上海</option><option>北京</option><option>广州</option><option>杭州</option><option>成都</option></select></label><label>哪一个周末<input id="departure" type="date" required></label><label>机票往返预算 <output id="budget-value">¥1,200</output><input id="budget" type="range" min="400" max="3000" step="100" value="1200"></label><button class="primary search-submit" type="submit">找个地方出逃 <span>↗</span></button></div><div class="search-bottom"><span>去程 <input aria-label="周五最早出发时间" id="earliest" type="time" value="19:00"> 后出发</span><span>返程 <input aria-label="周日最晚到达时间" id="latest" type="time" value="22:00"> 前到达</span><label><input id="direct" type="checkbox" checked> 只看直飞</label><span class="hint">预算仅含机票，不含住宿及当地交通</span></div></form>
-<section class="results-head"><div><p class="eyebrow">YOUR NEXT LITTLE ESCAPE</p><h2 id="section-title">这周末，去这里</h2><p id="result-summary"></p></div><div><button id="add-quote" class="outline">＋ 记录网页报价</button><select id="sort" aria-label="排序"><option value="recommended">推荐优先</option><option value="price">机票预算从低到高</option><option value="duration">飞行时间最短</option></select></div></section>
-<div class="data-note"><span class="dot"></span><div><strong>正在浏览演示行程</strong><span>用于体验筛选，不是实时机票报价，不代表该日期有票。你也可以录入自己在平台查到的价格。</span></div><button id="show-records">查看我的报价 →</button></div>
-<div class="chips" id="chips"><button class="selected" data-tag="全部">全部目的地</button><button data-tag="海边">海边放空</button><button data-tag="美食">为一口好吃的</button><button data-tag="山野">去山野透气</button><button data-tag="城市">城市漫游</button></div><div id="cards" class="cards" aria-live="polite"></div><div id="empty" class="empty" hidden><span>☁</span><h3>这次还没有合适的方案</h3><p>试试增加预算、放宽时间，或换一种旅行方式。</p><button id="reset" class="outline">重置筛选</button></div>
-<section class="how"><div><p class="eyebrow">A WEEKEND WELL SPENT</p><h2>少一点准备，<br>多一点出发。</h2></div><article><b>01</b><h3>先挑一个想去的地方</h3><p>按预算与可出行时间，找到适合自己的周末灵感。</p></article><article><b>02</b><h3>去平台核对机票</h3><p>复制行程，到购票平台查看实时价格、行李和退改条件。</p></article><article><b>03</b><h3>在原平台安心购买</h3><p>由原平台完成下单、支付与售后，这里只帮你做选择。</p></article></section>
-<section id="records-section" class="records"><div class="records-title"><h2>我的网页报价</h2><div><button id="export" class="outline">导出备份</button><label class="outline file-label">导入备份<input id="import" type="file" accept="application/json" hidden></label></div></div><p>报价由你手动记录，仅保存在当前浏览器。税费未知时显示“总价待核实”，不把票面价当作含税价。</p><div id="quote-list"></div></section></main><footer><span class="brand">↗ 周末出逃</span><p>生活不止两点一线。<small>价格由飞猪 FlyAI 返回，体验模式可能受限。实际票价与服务条件以购票平台为准。</small></p><span>MADE FOR YOUR TWO DAYS OFF.</span></footer>
-<dialog id="trip-dialog"><button class="close" data-close="trip-dialog" aria-label="关闭详情">×</button><div id="trip-content"></div></dialog>
-<dialog id="quote-dialog"><button class="close" data-close="quote-dialog" aria-label="关闭报价表单">×</button><p class="eyebrow">YOUR OWN PRICE NOTES</p><h2>记录一份网页报价</h2><p class="muted">填入平台实际展示的价格，方便下次核对。</p><form id="quote-form"><div class="form-grid"><label>出发城市<input name="origin" required maxlength="30"></label><label>目的城市<input name="destination" required maxlength="30"></label><label>去程日期<input name="outDate" type="date" required></label><label>返程日期<input name="backDate" type="date" required></label><label>去程航班号<input name="outFlight" required maxlength="30" placeholder="如 CA1304"></label><label>返程航班号<input name="backFlight" required maxlength="30"></label><label>平台 / 销售商<input name="seller" required maxlength="60"></label><label>人数<input name="adults" type="number" min="1" max="9" value="1" required></label><label>往返票面价（人民币）<input name="fare" type="number" min="0" step="0.01" required></label><label>往返税费（未知留空）<input name="tax" type="number" min="0" step="0.01"></label><label class="wide">购买页链接<input name="url" type="url" required placeholder="https://…"></label><label class="wide">行李、退改与优惠条件<textarea name="conditions" maxlength="1000" placeholder="例如：无托运行李；需会员；税费是否已包含"></textarea></label><label class="wide check"><input name="included" type="checkbox"> 填写的票面价已是含税往返总价</label></div><p id="form-error" role="alert"></p><button class="primary" type="submit">保存到我的浏览器</button></form></dialog><div id="toast" role="status"></div><script type="module" src="app.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="按时间和预算发现适合周末出发的目的地。">
+  <title>周末出逃 · 不请假的小旅行</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./"><span class="brand-mark" aria-hidden="true">↗</span><span>周末出逃</span></a>
+    <nav aria-label="主导航">
+      <button id="discover" class="nav active">发现目的地</button>
+      <button id="favorites" class="nav">我的收藏 <span id="fav-count">0</span></button>
+    </nav>
+  </header>
+  <main>
+    <section class="hero">
+      <img class="hero-image" src="images/guilin-hero.webp" srcset="images/guilin.webp 800w, images/guilin-hero.webp 1100w" sizes="(max-width: 699px) 100vw, 1250px" alt="漓江绕过桂林兴坪村落，远处层叠的喀斯特山峰" fetchpriority="high">
+      <div class="hero-copy">
+        <h1>周末，<br><span>去别处走走。</span></h1>
+        <p class="lead">周五或周六出发，周日回来。<br>定好时间和预算，看看这个周末能飞去哪儿。</p>
+      </div>
+      <p class="hero-location">桂林 · 兴坪漓江</p>
+    </section>
 
+    <form id="search-form" class="search-box">
+      <div class="search-fields">
+        <label class="search-field"><span class="field-label">出发城市</span>
+          <select id="origin"><option>深圳</option><option>上海</option><option>北京</option><option>广州</option><option>杭州</option><option>成都</option></select>
+        </label>
+        <label class="search-field"><span class="field-label">出发日期</span>
+          <input id="departure" type="date" required>
+        </label>
+        <label class="search-field budget-field"><span class="field-label">往返预算（含机建燃油）</span>
+          <output id="budget-value" for="budget">¥1,200</output><input id="budget" type="range" min="400" max="3000" step="100" value="1200">
+        </label>
+        <button class="primary search-submit" type="submit">查询全部目的地 ↗</button>
+      </div>
+      <div class="search-bottom">
+        <label>去程日期<select id="departure-day"><option value="5">周五出发</option><option value="6">周六出发</option></select></label>
+        <label>去程 <input aria-label="去程最早起飞时间" id="earliest" type="time" required value="21:00"> 后起飞</label>
+        <label>周日返程 <input aria-label="返程最早起飞时间" id="return-earliest" type="time" required value="18:00"> 后起飞</label>
+        <label class="direct-field"><input id="direct" type="checkbox" checked> 只看直飞</label>
+      </div>
+    </form>
+
+    <section class="results-head">
+      <div><h2 id="section-title">这周末，去这里</h2><p id="result-summary"></p></div>
+      <select id="sort" aria-label="排序"><option value="recommended">推荐优先</option><option value="price">往返含费总价从低到高</option><option value="duration">飞行时间最短</option></select>
+    </section>
+    <div class="data-note" role="status">正在加载票价缓存</div>
+    <div class="chips" id="chips">
+      <button class="selected" data-tag="全部">全部目的地</button><button data-tag="海边">海边</button><button data-tag="美食">美食</button><button data-tag="山野">山野</button><button data-tag="城市">城市漫游</button>
+    </div>
+    <details id="query-details" class="query-details" hidden><summary>各目的地查询状态</summary><ul></ul></details>
+    <div id="cards" class="cards" aria-live="polite"></div>
+    <div id="empty" class="empty" hidden><h3>这次还没有合适的方案</h3><p>试试增加预算或放宽时间。</p><button id="reset" class="outline">重置筛选</button></div>
+
+    <section class="how">
+      <h2>订票前看一眼</h2>
+      <article><h3>核对含费总价</h3><p>往返报价包含估算的机建和燃油，成交价以飞猪为准。</p></article>
+      <article><h3>在飞猪选套餐</h3><p>打开航班详情，前往飞猪查看行李额和退改条件。</p></article>
+      <article><h3>确认去返机场</h3><p>下单前核对航班日期、起飞时间和机场。</p></article>
+    </section>
+  </main>
+  <footer>
+    <a class="brand" href="./"><span class="brand-mark" aria-hidden="true">↗</span><span>周末出逃</span></a>
+    <p>报价由飞猪 FlyAI 提供</p>
+    <a class="city-photo-credit" href="images/credits.html">照片来源与许可</a>
+  </footer>
+  <dialog id="trip-dialog"><button class="close" data-close="trip-dialog" aria-label="关闭详情">×</button><div id="trip-content"></div></dialog>
+  <div id="toast" role="status"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
