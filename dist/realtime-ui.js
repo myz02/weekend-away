@@ -30,11 +30,12 @@ let job = null, tag = '全部', saved = false, busy = false, available = false;
 let hasSearched = false;
 let appliedBudget = null;
 let coveredDates = [];
+const destinationIds = new Set(cities.map(city => city.id));
 let favorites = readFavorites();
 function readFavorites() {
   try {
     const value = JSON.parse(localStorage.getItem('weekend-favorites'));
-    return Array.isArray(value) ? value : [];
+    return Array.isArray(value) ? value.filter(id => destinationIds.has(id)) : [];
   } catch { return []; }
 }
 
