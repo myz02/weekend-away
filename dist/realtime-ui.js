@@ -2,6 +2,7 @@ import {returnDate, weekend} from './engine.js';
 import {plansWithinBudget} from './budget.js';
 import {syncDepartureCalendar} from './departure-calendar.js';
 import {destinations as cities} from './destinations.js';
+import {cityGuides, stopMentions} from './city-guides.js';
 
 document.documentElement.dataset.live = '1';
 
@@ -49,6 +50,7 @@ function make(tagName, className, text) {
 const noteText = $('.data-note');
 const queryDetails = $('#query-details');
 const empty = $('#empty');
+const isRail = () => $('#travel-mode input[value=rail]').checked;
 const budget = () => Number($('#budget').value);
 function matchesCityKeyword(city) {
   const keyword = $('#city-search').value.trim().toLowerCase();
@@ -65,17 +67,26 @@ function addPlanPrice(body, plan, result) {
     make('p', 'live-flights', `去 ${outbound.number} ${outbound.departureTime} → ${outbound.arrivalTime}${outbound.nextDay ? '（次日）' : ''}`),
     make('p', 'live-flights', `回 ${inbound.number} ${inbound.departureTime} → ${inbound.arrivalTime}`),
   );
+  const rail = isRail();
   const stale = Date.now() - Date.parse(result.collectedAt) > 86400000;
   const price = make('div', 'price');
   price.append(
-    make('small', '', `${plan.estimated ? '往返含费估算' : '往返含费总价'} / 成人 1 人${stale ? ' · 旧报价' : ''}`),
+    make('small', '', `${rail ? '二等座往返总价' : plan.estimated ? '往返含费估算' : '往返含费总价'} / 成人 1 人${stale ? ' · 旧报价' : ''}`),
     make('strong', '', money(plan.total)),
   );
   body.append(
     price,
-    make('p', 'muted', `票面 ${money(plan.fare)} ＋ 机建燃油 ${money(plan.total - plan.fare)}`),
+    make('p', 'muted', rail ? `${outbound.departureAirport} → ${outbound.arrivalAirport} / ${inbound.departureAirport} → ${inbound.arrivalAirport}` : `票面 ${money(plan.fare)} ＋ 机建燃油 ${money(plan.total - plan.fare)}`),
     make('small', 'muted', '采集于 ' + fareTime(result.collectedAt)),
   );
+}
+
+function quoteStatus(result) {
+  if (!result) return '还没有可用报价。可回到首页选择飞机或高铁，查询这座城市的往返交通。';
+  if (result.status === 'success') {
+    return result.options?.some(plan => Number.isFinite(plan.total)) ? '符合时间的往返方案超出当前预算。' : '往返总价待核实。';
+  }
+  return result.message || statusText(result);
 }
 
 function createCard(city, plans, result) {
@@ -105,15 +116,18 @@ function createCard(city, plans, result) {
   art.append(make('span', 'art-tag', city.hasPhoto ? city.photoSubject : city.landmark), favorite);
   const body = make('div', 'card-body');
   body.append(make('h3', '', city.city), make('p', 'city-caption', city.caption));
-  if (plans.length) {
-    addPlanPrice(body, plans[0], result);
-    const button = make('button', 'detail', '查看航班和费用 ↗');
+  const guide = cityGuides[city.id];
+  if (plans.length) addPlanPrice(body, plans[0], result);
+  else if (result || (guide && appliedBudget !== null)) body.append(make('p', 'muted', quoteStatus(result)));
+  if (guide || plans.length) {
+    const label = guide ? '查看城市详情 ↗' : isRail() ? '查看车次和费用 ↗' : '查看航班和费用 ↗';
+    const button = make('button', 'detail', label);
+    button.type = 'button';
+    button.setAttribute('aria-label', `${label.replace(' ↗', '')}：${city.city}`);
     button.onclick = () => showPlans(city, result);
     const actions = make('div', 'live-card-actions');
     actions.append(button);
     body.append(actions);
-  } else if (result) {
-    body.append(make('p', 'muted', '暂无可用往返报价'));
   }
   card.append(art, body);
   return card;
@@ -128,7 +142,17 @@ function renderQueryDetails() {
       ? (plansWithinBudget(result, appliedBudget ?? Infinity).length ? (appliedBudget === null ? '有往返方案' : '有预算内方案')
         : result.options?.some(plan => Number.isFinite(plan.total)) ? '总价超出预算' : '总价待核实')
       : result.message || statusText(result);
-    return make('li', '', result.city + ' · ' + text);
+    const item = make('li', '', result.city + ' · ' + text);
+    if (result.searchUrl || (result.status === 'error' && !isRail())) {
+      const {origin, outDate, backDate} = job.query;
+      const params = new URLSearchParams({origin, destination: result.city, outDate, backDate});
+      const link = make('a', '', isRail() ? '去 12306 查往返 ↗' : '去飞猪查往返 ↗');
+      link.href = result.searchUrl ?? ('/api/round-trip?' + params);
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      item.append(' · ', link);
+    }
+    return item;
   }));
 }
 
@@ -146,10 +170,13 @@ function render() {
     && matchesCityKeyword(city)
     && (tag === '全部' || city.tag === tag || (tag === '城市' && ['成都', '重庆', '昆明', '青岛', '厦门'].includes(city.city)))
     && (!saved || favorites.includes(city.id)));
-  const entries = candidateCities.map(city => {
+  const matchingCities = candidateCities.map(city => {
     const result = job?.results?.[city.city];
     return {city, result, plans: plansWithinBudget(result, limit)};
-  }).filter(entry => appliedBudget === null || entry.plans.length > 0);
+  });
+  const entries = matchingCities.filter(entry => appliedBudget === null || entry.plans.length > 0);
+  const guideEntries = appliedBudget === null ? [] : matchingCities.filter(({city, plans}) =>
+    !plans.length && cityGuides[city.id]);
   if ($('#sort').value === 'price' && job) {
     entries.sort((a, b) => (a.plans[0]?.total ?? Infinity) - (b.plans[0]?.total ?? Infinity));
   }
@@ -162,17 +189,29 @@ function render() {
   $('#section-title').textContent = saved ? '收藏目的地' : appliedBudget !== null ? '预算内目的地' : '这周末，去这里';
   const date = $('#departure').value;
   const dateRange = date ? date + ' — ' + returnDate(date) : '请选择出发日期';
-  const progress = appliedBudget !== null
+  const results = Object.values(job?.results ?? {});
+  const queryFailed = appliedBudget !== null && results.length > 0 && results.every(result => result.status === 'error');
+  const rateLimited = queryFailed && results.some(result => result.message?.includes('飞猪体验通道请求较频繁'));
+  const retryAt = Date.parse(job?.cache?.retryAt);
+  const progress = queryFailed ? '本次未取得报价，暂无法判断预算是否够用' : appliedBudget !== null
     ? `${entries.length} 个目的地符合已查询预算 ${money(limit)}`
     : job ? '已按起飞时间筛选 · 点击查询应用往返预算'
-      : `浏览 ${entries.length} 个目的地 · 点击查询查看往返航班和票价`;
+      : `浏览 ${entries.length} 个目的地 · 点击查询查看往返${isRail() ? '车次' : '航班'}和票价`;
   $('#result-summary').textContent = `${origin}出发 · ${dateRange} · ${progress}`;
   $('#cards').replaceChildren(...entries.map(({city, plans, result}) => createCard(city, plans, result)));
-  empty.hidden = entries.length > 0;
-  empty.querySelector('h3').textContent = appliedBudget !== null
+  $('#unpriced-guides').hidden = guideEntries.length === 0;
+  $('#unpriced-guide-cards').replaceChildren(...guideEntries.map(({city, plans, result}) => createCard(city, plans, result)));
+  empty.hidden = entries.length > 0 || guideEntries.length > 0;
+  empty.querySelector('h3').textContent = queryFailed
+    ? (rateLimited ? '飞猪查询暂时受限' : '本次未取得报价')
+    : appliedBudget !== null
     ? '没有符合当前筛选的报价'
     : '没有符合当前筛选的目的地';
-  empty.querySelector('p').textContent = appliedBudget !== null
+  empty.querySelector('p').textContent = queryFailed
+    ? (rateLimited && retryAt > Date.now()
+      ? `请在北京时间 ${fareTime(retryAt)} 后重试；也可以展开各目的地查询状态，直接去飞猪查往返。`
+      : '请稍后重试，或展开各目的地查询状态，直接去飞猪查往返。')
+    : appliedBudget !== null
     ? `已查询预算 ${money(limit)}。可调整预算后重新查询，或展开查看各目的地状态。`
     : '试试选择其他分类，或在目的地卡片上添加收藏。';
   renderQueryDetails();
@@ -184,6 +223,10 @@ function flightBreakdown(direction, flight) {
     make('p', '', `${direction} ${flight.date} · ${flight.number} · ${flight.departureTime} → ${flight.arrivalTime}${flight.nextDay ? '（次日）' : ''}`),
     make('p', 'muted', `${flight.departureAirport}（${flight.depAirportCode}） → ${flight.arrivalAirport}（${flight.arrAirportCode}）`),
   );
+  if (isRail()) {
+    section.append(make('p', 'fee-line', `二等座 ${money(flight.fare)} · ${flight.seats === '有' ? '有余票' : '余票 ' + flight.seats + ' 张'}`));
+    return section;
+  }
   const fees = flight.fees;
   if (fees) {
     section.append(make('p', 'fee-line', `票面 ${money(flight.fare)} ＋ 机建 ${money(fees.airport)} ＋ 燃油 ${money(fees.fuel)} ＝ 估算 ${money(flight.total)}`));
@@ -243,36 +286,110 @@ function roundTripBooking(destination, {origin, outDate, backDate}, {outbound, i
   return actions;
 }
 
+function railBooking(url) {
+  const link = make('a', 'detail round-trip-search', '去 12306 查往返 ↗');
+  link.href = url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  return link;
+}
+
+function sourceLink({title, url}) {
+  const link = make('a', '', title + ' ↗');
+  link.href = url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  return link;
+}
+
+function renderGuide(box, guide) {
+  box.append(make('p', 'muted', '两天一夜 · 首次到访路线'));
+  for (const [index, day] of guide.days.entries()) {
+    const section = make('section', 'guide-day');
+    section.append(make('h3', '', `Day ${index + 1} · ${day.title}`));
+    const stops = make('ol', 'guide-route');
+    for (const stop of day.stops) {
+      const item = make('li', '');
+      const count = stopMentions(guide, stop);
+      const mention = make('small', 'guide-count', `${count}/${guide.sources.length} 篇`);
+      item.append(make('strong', '', stop), mention);
+      stops.append(item);
+    }
+    section.append(stops, make('p', 'muted', day.tip));
+    box.append(section);
+  }
+  box.append(make('p', 'muted', guide.notes), sourceLink(guide.travelLink));
+  const details = make('details', 'guide-sources');
+  details.append(make('summary', '', `样本来源与统计方式 · ${guide.platform} ${guide.sources.length} 篇`),
+    make('p', 'muted', '样本为公开可读的两日游攻略。景点别名合并，同篇重复提及只计一次；路线再按地理位置和返程安排整理。该样本不代表全平台热度。'));
+  const list = make('ul', '');
+  for (const source of guide.sources) {
+    const item = make('li', '');
+    item.append(sourceLink(source));
+    list.append(item);
+  }
+  details.append(list);
+  box.append(details);
+}
+
 function showPlans(city, result) {
-  if (job?.temporaryExpiresAt && Date.parse(job.temporaryExpiresAt) <= Date.now()) {
-    render();
-    return;
-  }
+  const guide = cityGuides[city.id];
+  const expired = job?.temporaryExpiresAt && Date.parse(job.temporaryExpiresAt) <= Date.now();
   const box = $('#trip-content');
-  const {origin} = job.query;
-  const plans = plansWithinBudget(result, appliedBudget ?? Infinity);
-  const title = make('h2', '', origin + ' ↔ ' + city.city);
+  const plans = expired ? [] : plansWithinBudget(result, appliedBudget ?? Infinity);
+  if (!guide && !plans.length) return;
+  const title = make('h2', '', guide ? city.city : `${job.query.origin} ↔ ${city.city}`);
   title.id = 'trip-title';
-  $('#trip-heading').replaceChildren(
-    title,
-    make('p', 'muted', appliedBudget === null ? '成人 1 人'
-      : `往返预算 ${money(appliedBudget)} · 成人 1 人`),
-    make('p', 'muted', '价格以飞猪往返订单为准。找到与所选两班匹配的套餐后会直接打开。'),
-  );
-  box.replaceChildren();
-  for (const [index, plan] of plans.entries()) {
-    const row = make('div', 'trip-summary');
-    row.append(
-      make('b', '', `方案 ${index + 1} · ${plan.estimated ? '往返估算' : '往返总价'} ${money(plan.total)}`),
-      flightBreakdown('去程', plan.outbound),
-      flightBreakdown('返程', plan.inbound),
-      roundTripBooking(city.city, job.query, plan),
-    );
-    box.append(row);
-  }
-  box.append(make('p', 'muted', '采集时间 ' + fareTime(result.collectedAt)));
+  const heading = $('#trip-heading');
+  heading.replaceChildren(title);
   const dialog = $('#trip-dialog');
   dialog.setAttribute('aria-labelledby', title.id);
+  const renderTransport = () => {
+    if (!plans.length) {
+      box.append(make('p', 'muted', quoteStatus(expired ? null : result)));
+      return;
+    }
+    const budgetText = appliedBudget === null ? '成人 1 人' : `往返预算 ${money(appliedBudget)} · 成人 1 人`;
+    const guidance = isRail() ? '二等座票价和余票以铁路 12306 下单时为准。请核对两程车站。' : '价格以飞猪往返订单为准。找到与所选两班匹配的套餐后会直接打开。';
+    const notices = [make('p', 'muted', budgetText), make('p', 'muted', guidance)];
+    if (guide) box.append(make('h3', '', `${job.query.origin} ↔ ${city.city}`), ...notices);
+    else heading.append(...notices);
+    for (const [index, plan] of plans.entries()) {
+      const row = make('div', 'trip-summary');
+      row.append(
+        make('b', '', `方案 ${index + 1} · ${plan.estimated ? '往返估算' : '往返总价'} ${money(plan.total)}`),
+        flightBreakdown('去程', plan.outbound), flightBreakdown('返程', plan.inbound),
+        isRail() ? railBooking(result.searchUrl) : roundTripBooking(city.city, job.query, plan),
+      );
+      box.append(row);
+    }
+    box.append(make('p', 'muted', '采集时间 ' + fareTime(result.collectedAt)));
+  };
+  box.replaceChildren();
+  if (guide) {
+    const nav = make('div', 'city-detail-options');
+    nav.setAttribute('role', 'group');
+    nav.setAttribute('aria-label', '城市详情');
+    const transport = make('button', '', '交通');
+    const play = make('button', '', '游玩');
+    for (const button of [transport, play]) {
+      button.type = 'button';
+      button.setAttribute('aria-controls', box.id);
+    }
+    const select = showGuide => {
+      transport.setAttribute('aria-pressed', String(!showGuide));
+      play.setAttribute('aria-pressed', String(showGuide));
+      box.replaceChildren();
+      if (showGuide) renderGuide(box, guide);
+      else renderTransport();
+      box.scrollTop = 0;
+    };
+    transport.onclick = () => select(false);
+    play.onclick = () => select(true);
+    nav.append(transport, play);
+    heading.append(nav);
+    select(!plans.length);
+  } else renderTransport();
   dialog.showModal();
   box.scrollTop = 0;
 }
@@ -280,6 +397,7 @@ function showPlans(city, result) {
 function lock(value) {
   busy = value;
   $('#departure-trigger').disabled = value;
+  $('#travel-mode').disabled = value;
   for (const id of ['origin', 'departure', 'departure-day', 'earliest', 'return-earliest']) $('#' + id).disabled = value;
   $('.search-submit').disabled = value;
   $('.search-submit').textContent = value ? '正在读取缓存…'
@@ -317,6 +435,7 @@ async function loadFares(limit) {
     return;
   }
   const origin = $('#origin').value;
+  const rail = isRail();
   const outDate = $('#departure').value;
   const earliest = $('#earliest').value;
   const returnEarliest = $('#return-earliest').value;
@@ -325,10 +444,10 @@ async function loadFares(limit) {
     return;
   }
   const query = {
-    origin, outDate, backDate: returnDate(outDate),
+    origin, outDate, backDate: returnDate(outDate), mode: rail ? 'rail' : 'flight',
     cacheOnly: limit === null,
     earliest, returnEarliest,
-    destinations: cities.filter(city => city.airport && city.city !== origin && matchesCityKeyword(city)).map(city => city.city),
+    destinations: cities.filter(city => (rail || city.airport) && city.city !== origin && matchesCityKeyword(city)).map(city => city.city),
   };
   if (!query.destinations.length) {
     noteText.textContent = '当前搜索没有可查询的直飞机票目的地，请更换搜索词。';
@@ -337,7 +456,7 @@ async function loadFares(limit) {
   lock(true);
   if (limit !== null) {
     $('.search-submit').textContent = '正在查询报价…';
-    noteText.textContent = '正在读取已有报价，缺少的航线将向飞猪补查。';
+    noteText.textContent = rail ? '正在向铁路 12306 查询直达车次、二等座票价与余票…' : '正在读取已有报价，缺少的航线将向飞猪补查。';
   }
   try {
     const response = await fetch('/api/search', {
@@ -348,8 +467,12 @@ async function loadFares(limit) {
     job = data;
     hasSearched = true;
     appliedBudget = limit;
-    showCacheStatus(data.cache, outDate, data.temporaryExpiresAt);
-    if (limit !== null && !data.temporaryExpiresAt && Object.values(job.results).some(result => result.status === 'success')) {
+    if (rail) {
+      const failures = Object.values(data.results).filter(result => result.status === 'error').length;
+      noteText.textContent = failures ? `铁路 12306 有 ${failures} 个目的地未返回报价。可展开查询状态，去官网核价。`
+        : '铁路 12306 · 直达高铁 / 动车二等座 · 票价及余票随时变动。';
+    } else showCacheStatus(data.cache, outDate, data.temporaryExpiresAt);
+    if (!rail && limit !== null && !data.temporaryExpiresAt && Object.values(job.results).some(result => result.status === 'success')) {
       try { localStorage.setItem('weekend-last-cache', JSON.stringify(job)); } catch {}
     }
     render();
@@ -370,9 +493,24 @@ for (const id of ['origin', 'departure', 'departure-day', 'earliest', 'return-ea
     job = null;
     appliedBudget = null;
     render();
-    if (hasSearched && $('#departure').value) void loadFares(null);
+    if (!isRail() && hasSearched && $('#departure').value) void loadFares(null);
   });
 }
+$('#travel-mode').onchange = () => {
+  const rail = isRail();
+  job = null;
+  appliedBudget = null;
+  if ($('#trip-dialog').open) $('#trip-dialog').close();
+  $('#travel-budget-label').textContent = rail ? '往返预算（二等座）' : '往返预算（含机建燃油）';
+  for (const [input, label, name] of [['earliest','outbound-time-label','去程'], ['return-earliest','return-time-label','返程']]) {
+    $('#' + label).textContent = rail ? '后发车' : '后起飞';
+    $('#' + input).setAttribute('aria-label', name + (rail ? '最早发车时间' : '最早起飞时间'));
+  }
+  $('#direct-label').textContent = rail ? '只看直达' : '只看直飞';
+  $('#sort').querySelector('[value=price]').textContent = rail ? '往返票价从低到高' : '往返含费总价从低到高';
+  noteText.textContent = rail ? '铁路 12306 · 查询直达高铁 / 动车二等座' : '';
+  render();
+};
 $('#budget').oninput = () => { $('#budget-value').textContent = money(budget()); };
 $('#sort').onchange = render;
 $('#city-search').oninput = () => {
