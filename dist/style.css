@@ -337,7 +337,7 @@ footer .city-photo-credit { margin: 0; text-decoration: underline; text-underlin
 
 .travel-mode { min-inline-size: 0; margin: 0 0 16px; padding: 0; border: 0; }
 .travel-mode legend { padding: 0; margin-bottom: 7px; color: var(--muted); font-size: 12px; font-weight: 650; }
-.travel-mode-options { display: flex; gap: 8px; }
+.travel-mode-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .travel-mode-options label { position: relative; }
 .travel-mode-options input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .travel-mode-options span {
@@ -360,17 +360,41 @@ footer .city-photo-credit { margin: 0; text-decoration: underline; text-underlin
 .city-detail-options button { min-height: 44px; padding: 0 22px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft-teal); color: var(--ink); font-weight: 700; }
 .city-detail-options button[aria-pressed=true] { background: var(--teal); color: white; border-color: var(--teal); }
 .city-detail-options button:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
-.guide-day { margin: 14px 0; padding: 14px 16px; border-radius: 12px; background: #eaf4f0; }
-.guide-day h3 { margin: 0 0 12px; font-size: 16px; }
-.guide-day p { margin-bottom: 0; }
-.guide-route { display: flex; flex-wrap: wrap; gap: 8px 10px; list-style: none; margin: 0; padding: 0; }
-.guide-route li { display: flex; align-items: center; gap: 5px; }
-.guide-route li:not(:last-child)::after { content: '→' / ''; margin-inline-start: 3px; color: var(--muted); }
-.guide-count { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.guide-sources { margin-top: 16px; }
-.guide-sources summary { cursor: pointer; font-weight: 650; }
-.guide-sources a, #trip-content > a { text-decoration: underline; text-underline-offset: .2em; color: var(--teal); }
+.transport-quotes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 105px), 1fr)); gap: 8px; margin-top: 14px; }
+.transport-quote { min-width: 0; padding: 10px; border-radius: 10px; background: var(--soft-teal); }
+.transport-quote > * { display: block; }
+.quote-mode { font-size: 12px; }
+.quote-price { color: var(--teal); font-size: 21px; margin: 3px 0; font-variant-numeric: tabular-nums; }
+.quote-caption { margin: 2px 0; color: var(--muted); font-size: 12px; }
+.quote-play { margin-top: 4px; color: var(--teal); font-weight: 700; font-size: 12px; }
+.quote-retry { margin-top: 5px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: white; color: var(--teal); font-weight: 650; }
+.transport-tabs { margin-bottom: 8px; }
+.guide-options { flex-wrap: wrap; }
+.guide-options button { padding-inline: 14px; }
+.guide-estimate { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 12px; margin: 14px 0 0; font-size: 12px; color: var(--muted); }
+.guide-estimate strong { color: var(--teal); }
+.guide-hours { margin: 0 0 8px; color: var(--teal); font-size: 12px; font-weight: 700; }
+.guide-plan-button { margin: 0 8px 8px 0; }
+.guide-day { margin: 12px 0; padding: 12px 14px; border-radius: 12px; background: #eaf4f0; }
+.guide-day h3 { margin: 0; font-size: 16px; }
+.guide-day h3:not(:last-child) { margin-bottom: 8px; }
+.guide-day-intro { margin: 8px 0 0; }
+.guide-route { list-style: none; margin: 0; padding: 0; }
+.guide-stop { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 2px 10px; }
+.guide-stay { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.guide-stay .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.guide-leg { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; color: var(--teal); font-size: 12px; }
+.guide-leg a { text-decoration: underline; text-decoration-color: #94b9b0; text-underline-offset: .2em; }
+.guide-notes { margin-top: 12px; }
+.guide-notes summary { width: fit-content; min-height: 36px; padding-block: 8px; color: var(--teal); cursor: pointer; }
+.guide-notes a { text-decoration: underline; text-underline-offset: .2em; color: var(--teal); }
+.trip-cost-fare, .trip-cost-row, .trip-cost-total { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.trip-cost-fare, .trip-cost-note { margin: 4px 0 8px; }
+.trip-cost-breakdown { display: grid; gap: 5px; }
+.trip-cost-row { color: var(--muted); }
+.trip-cost-row input { width: 92px; min-height: 34px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; background: white; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+.trip-cost-total { padding: 8px 0 0; margin-top: 8px; border-top: 1px solid var(--line); color: var(--teal); }
 
 .unpriced-guides { margin-block: 24px 0; }
-.unpriced-guides > h2 { margin: 0 0 6px; font-size: 20px; }
-.unpriced-guides > p { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+.unpriced-guides > summary { width: fit-content; padding-block: 8px; color: var(--teal); cursor: pointer; }
+.unpriced-guides > .cards { margin-top: 12px; }

@@ -1,5 +1,6 @@
 import {spaceRequestStarts} from './request-spacing.mjs';
 import {destinations, originAirports} from './dist/destinations.js';
+import {keepWeekendOptions} from './dist/weekend-window.js';
 import { estimateDomesticFees, roundMoney } from './fees.mjs';
 import {execFile} from 'node:child_process';import {promisify} from 'node:util';import {fileURLToPath} from 'node:url';
 const exec=promisify(execFile),cli=fileURLToPath(new URL('./node_modules/@fly-ai/flyai-cli/dist/flyai-bundle.cjs',import.meta.url));
@@ -194,5 +195,5 @@ export function combine(out, back, earliest, latest = '23:59', returnEarliest) {
     }
   }
   pairs.sort((a, b) => (a.total ?? Infinity) - (b.total ?? Infinity) || a.fare - b.fare);
-  return { best: pairs[0] || null, options: pairs.slice(0, 8), matchingCount: pairs.length };
+  return { best: pairs[0] || null, options: keepWeekendOptions(pairs, 8, 'flight'), matchingCount: pairs.length };
 }

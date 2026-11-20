@@ -1,5 +1,7 @@
 import {spaceRequestStarts} from './request-spacing.mjs';
 import {returnDate} from './dist/engine.js';
+import {keepWeekendOptions, returnBefore} from './dist/weekend-window.js';
+import {openDatabase} from './database.mjs';
 
 const base = 'https://kyfw.12306.cn';
 const init = base + '/otn/leftTicket/init';
@@ -9,8 +11,9 @@ const shanghaiDate = new Intl.DateTimeFormat('en-CA', {timeZone: 'Asia/Shanghai'
 let retryAt = 0;
 let session;
 let sessionPending;
-const cache = new Map();
-const pending = new Map();
+let memoryDatabase;
+const pendingByDatabase = new WeakMap();
+const railTtl = 120000;
 
 export function parseStations(text) {
   const cities = {}, stations = {};
@@ -42,18 +45,20 @@ export function parseRailLegs(rows, stations, date) {
     if (fare <= 0 || !stations[p[6]] || !stations[p[7]]) continue;
     const minutes = v => Number(v.slice(0, 2)) * 60 + Number(v.slice(3));
     trains.push({number, date, departureTime, arrivalTime, nextDay: minutes(departureTime) + minutes(duration) >= 1440,
-      departureAirport: stations[p[6]], arrivalAirport: stations[p[7]], fare, total: fare, seats: p[30]});
+      departureAirport: stations[p[6]], arrivalAirport: stations[p[7]],
+      depStationCode:p[6], arrStationCode:p[7], fare, total: fare, seats: p[30]});
   }
   return trains;
 }
 
-export function railPlans(outbound, inbound, {earliest, returnEarliest}) {
-  const cheapest = (trains, predicate) => trains.filter(predicate).sort((a,b) => a.fare - b.fare || a.departureTime.localeCompare(b.departureTime)).slice(0, 6);
-  const going = cheapest(outbound, trip => trip.departureTime >= earliest);
-  const returning = cheapest(inbound, trip => trip.departureTime >= returnEarliest && !trip.nextDay);
-  return going.flatMap(out => returning.map(back => ({outbound:out, inbound:back,
+export function railPlans(outbound, inbound, {earliest, returnEarliest, latest}) {
+  const going = outbound.filter(trip => trip.departureTime >= earliest);
+  const returning = inbound.filter(trip => trip.departureTime >= returnEarliest &&
+    !trip.nextDay && returnBefore(trip, latest));
+  const options = going.flatMap(out => returning.map(back => ({outbound:out, inbound:back,
     total:Math.round((out.fare + back.fare)*100)/100})))
-    .sort((a,b) => a.total-b.total || a.outbound.departureTime.localeCompare(b.outbound.departureTime)).slice(0, 6);
+    .sort((a,b) => a.total-b.total || a.outbound.departureTime.localeCompare(b.outbound.departureTime));
+  return keepWeekendOptions(options, 6, 'rail');
 }
 
 function waitError() { return Error('12306 暂时无法返回报价，请稍后重试或到官网查询。'); }
@@ -73,36 +78,49 @@ async function getSession() {
   return sessionPending;
 }
 
-async function getLeg(context, from, to, date) {
-  const key = `${from}:${to}:${date}`;
-  const entry = cache.get(key);
-  if (entry?.expires > Date.now()) return entry;
+async function fetchRailTrains(context, from, to, date) {
   if (retryAt > Date.now()) throw waitError();
-  if (!pending.has(key)) pending.set(key, spacing(async () => {
-    if (retryAt > Date.now()) throw waitError();
-    const params = new URLSearchParams({'leftTicketDTO.train_date':date, 'leftTicketDTO.from_station':from,
-      'leftTicketDTO.to_station':to, purpose_codes:'ADULT'});
-    try {
-      const res = await fetch(`${base}/otn/${context.endpoint}?${params}`, {signal:AbortSignal.timeout(7500),
-        headers:{accept:'application/json, text/javascript, */*; q=0.01', referer:init,
-          'x-requested-with':'XMLHttpRequest', cookie:context.cookie}});
-      if (!res.ok || !res.headers.get('content-type')?.match(/json|plain/i)) throw waitError();
-      const payload = await res.json();
-      if (payload.status !== true || !Array.isArray(payload.data?.result)) throw waitError();
-      const value = {trains:parseRailLegs(payload.data.result, {...context.stations, ...payload.data.map}, date),
-        collectedAt:new Date().toISOString(), expires:Date.now()+120000};
-      if (cache.size >= 512) cache.delete(cache.keys().next().value);
-      cache.set(key, value);
-      return value;
-    } catch {
-      retryAt = Date.now() + 60000;
-      throw waitError();
-    }
-  }).finally(() => pending.delete(key)));
+  const params = new URLSearchParams({'leftTicketDTO.train_date':date, 'leftTicketDTO.from_station':from,
+    'leftTicketDTO.to_station':to, purpose_codes:'ADULT'});
+  try {
+    const res = await fetch(`${base}/otn/${context.endpoint}?${params}`, {signal:AbortSignal.timeout(7500),
+      headers:{accept:'application/json, text/javascript, */*; q=0.01', referer:init,
+        'x-requested-with':'XMLHttpRequest', cookie:context.cookie}});
+    if (!res.ok || !res.headers.get('content-type')?.match(/json|plain/i)) throw waitError();
+    const payload = await res.json();
+    if (payload.status !== true || !Array.isArray(payload.data?.result)) throw waitError();
+    return parseRailLegs(payload.data.result, {...context.stations, ...payload.data.map}, date);
+  } catch {
+    retryAt = Date.now() + 60000;
+    throw waitError();
+  }
+}
+
+async function getLeg(store, fetchContext, fetchRailLeg, clock, from, to, date) {
+  const leg = {mode:'rail', scope:'temporary', from, to, date};
+  const cached = store.getLeg(leg, clock().toISOString());
+  if (cached) return cached;
+  if (retryAt > Date.now()) throw waitError();
+  if (!pendingByDatabase.has(store)) pendingByDatabase.set(store, new Map());
+  const pending = pendingByDatabase.get(store);
+  const key = JSON.stringify(leg);
+  if (!pending.has(key)) {
+    const request = spacing(async () => {
+      const trains = await fetchRailLeg(await fetchContext(), from, to, date);
+      const at = clock();
+      const expiresAt = new Date(at.getTime() + railTtl).toISOString();
+      const result = {trains, collectedAt:at.toISOString(), expiresAt};
+      store.saveLeg(leg, result, expiresAt);
+      return result;
+    }).finally(() => pending.delete(key));
+    pending.set(key, request);
+  }
   return pending.get(key);
 }
 
-export async function searchRail(query, now = new Date()) {
+export async function searchRail(query, now = new Date(), {
+  database, clock = () => new Date(), getRailSession = getSession, fetchRailLeg = fetchRailTrains,
+} = {}) {
   const today = shanghaiDate.format(now);
   const last = new Date(Date.parse(today + 'T00:00:00Z') + 14 * 86400000).toISOString().slice(0,10);
   const departure = new Date(query.outDate + 'T00:00:00Z');
@@ -110,36 +128,48 @@ export async function searchRail(query, now = new Date()) {
       returnDate(query.outDate) !== query.backDate || query.outDate < today) {
     throw Error('请选择周五或周六出发、同一周日返程的日期。');
   }
-  if (query.backDate > last) throw Error('返程还未到铁路 12306 的预售期，暂时无法查询往返报价。');
+  if (query.backDate > last) {
+    throw Object.assign(Error('返程还未到铁路 12306 的预售期，暂时无法查询往返报价。'),
+      {code:'RAIL_NOT_ON_SALE'});
+  }
   const results = Object.fromEntries([...new Set(query.destinations)].map(city => [city,{city}]));
-  let context;
-  try { context = await getSession(); } catch { throw waitError(); }
-  const from = context.cities[query.origin];
+  const store = database ?? await (memoryDatabase ??= openDatabase(':memory:'));
+  store.sweepExpired(clock().toISOString());
+  let sessionRequest;
+  const fetchContext = () => (sessionRequest ??= (async () => {
+    const context = await getRailSession();
+    store.saveRailDirectory(context);
+    return context;
+  })());
+  let directory;
+  try { directory = store.railDirectory() ?? await fetchContext(); } catch { throw waitError(); }
+  const from = directory.cities[query.origin];
   if (!from) throw Error('12306 站点列表没有匹配到出发城市。');
   const cities = Object.keys(results);
   let index = 0;
   async function worker() {
     while (index < cities.length) {
-      const city = cities[index++], result = results[city], to = context.cities[city];
+      const city = cities[index++], result = results[city], to = directory.cities[city];
       if (to) {
         // The official page decodes the URL with decodeURI, then splits on literal commas.
         result.searchUrl = `${init}?linktypeid=wf&fs=${encodeURIComponent(query.origin)},${from}` +
-          `&ts=${encodeURIComponent(context.stations[to])},${to}&date=${query.outDate},${query.backDate}&flag=N,Y,N`;
+          `&ts=${encodeURIComponent(directory.stations[to])},${to}&date=${query.outDate},${query.backDate}&flag=N,Y,N`;
       }
       if (!to || to === from) {
         Object.assign(result, {status:'no_match', message:'未匹配到目的地的 12306 站点'});
         continue;
       }
       try {
-        const out = await getLeg(context, from, to, query.outDate);
+        const out = await getLeg(store, fetchContext, fetchRailLeg, clock, from, to, query.outDate);
         if (!out.trains.some(train => train.departureTime >= query.earliest)) {
           Object.assign(result, {status:'no_match', message:'去程没有符合时间且有二等座报价的直达车次'});
           continue;
         }
-        const back = await getLeg(context, to, from, query.backDate);
+        const back = await getLeg(store, fetchContext, fetchRailLeg, clock, to, from, query.backDate);
         const options = railPlans(out.trains, back.trains, query);
         Object.assign(result, {status:options.length ? 'success' : 'no_match', options,
           collectedAt:[out.collectedAt, back.collectedAt].sort()[0],
+          expiresAt:[out.expiresAt, back.expiresAt].sort()[0],
           message:options.length ? '' : '返程没有符合时间、周日到达且有二等座报价的直达车次'});
       } catch (error) {
         Object.assign(result, {status:'error', message:error.message});

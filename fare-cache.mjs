@@ -1,5 +1,4 @@
-import {mkdir, readFile, rename, writeFile} from 'node:fs/promises';
-import {dirname} from 'node:path';
+import {openDatabase} from './database.mjs';
 import {collect, destinationAirports} from './live.mjs';
 import {runSearchBatch} from './search-batch.mjs';
 import {returnDate} from './dist/engine.js';
@@ -49,106 +48,90 @@ function coverage(outbound) {
   return [...calls.values()];
 }
 
-export async function openFareCache(file, {fetchLeg = collect, now = () => new Date()} = {}) {
-  const temporary = await openTemporaryFares(file + '.temporary', fetchLeg, now, validLeg);
-  let state = {day: null, updatedAt: null, legs: {}};
-  try {
-    const saved = JSON.parse(await readFile(file, 'utf8'));
-    if (saved?.legs) state = saved;
-  } catch (error) {
-    if (error.code !== 'ENOENT') console.warn('无法读取票价缓存，将重新采集', error.message);
-  }
+export async function openFareCache(file, {fetchLeg = collect, now = () => new Date(), database} = {}) {
+  const store = database ?? await openDatabase(file + '.sqlite', {legacyFlightFile: file, now});
+  const temporary = openTemporaryFares(store, fetchLeg, now);
   let refreshing = false;
   let progress = null;
-  let retryAt = null;
-  const persist = async () => {
-    await mkdir(dirname(file), {recursive: true});
-    await writeFile(file + '.tmp', JSON.stringify(state));
-    await rename(file + '.tmp', file);
-  };
-  const today = cacheSchedule(now()).day;
-  const obsolete = Object.keys(state.legs).filter(key => {
-    const [date, from, to] = key.split('/');
-    return date < today || !validLeg(from, to);
-  });
-  if (obsolete.length) {
-    for (const key of obsolete) delete state.legs[key];
-    await persist();
-  }
-  await temporary.sweep();
+  const started = store.latestRun();
+  let retryAt = started?.status === 'paused' ? started.retry_at : null;
+  store.pruneFlightRoutes(validLeg);
+  const pruneSchedule = day => store.pruneSchedule(day,
+    new Date(now().getTime() - 14 * 86400000).toISOString());
+  pruneSchedule(cacheSchedule(now()).day);
+  temporary.sweep();
 
   async function refresh() {
-    await temporary.sweep();
+    temporary.sweep();
     const schedule = cacheSchedule(now());
     const batch = schedule.due ? schedule.day : schedule.day + '-bootstrap';
-    const currentCoverage = state.coverageKey === coverageKey;
+    const completed = store.completedRun();
+    const currentCoverage = completed?.coverage === coverageKey;
     if (refreshing || (retryAt && now().getTime() < Date.parse(retryAt)) ||
-        (currentCoverage && (state.day === batch || (!schedule.due && state.day)))) return;
+        (currentCoverage && (completed.batch === batch || !schedule.due))) return;
     refreshing = true;
     retryAt = null;
-    const calls = coverage(schedule.outbound);
-    const existing = state.legs;
-    calls.sort(([a], [b]) => Number(Object.hasOwn(existing, a)) - Number(Object.hasOwn(existing, b)));
-    progress = {done: 0, total: calls.length};
-    let pendingWrites = 0;
-    let firstWrite = true;
+    let runId;
     try {
-      for (const [key, from, to, date, hour] of calls) {
-        if (Object.entries(state.legs[key] || {}).some(([cachedHour, entry]) =>
-          Number(cachedHour) <= hour && entry.day === batch)) {
+      const calls = coverage(schedule.outbound).map(([, from, to, date, hour]) =>
+        ({mode:'flight', scope:'scheduled', from, to, date, depHour:hour,
+          cached:store.covers(from, to, date)}));
+      calls.sort((a, b) => Number(a.cached) - Number(b.cached));
+      progress = {done: 0, total: calls.length};
+      runId = store.startRun(batch, coverageKey, calls.length, now().toISOString());
+      for (const leg of calls) {
+        const {from, to, date, depHour} = leg;
+        if (store.covers(from, to, date, depHour, batch)) {
           progress.done++;
           continue;
         }
         let result;
         try {
-          result = await fetchLeg(from, to, date, hour ? {depHour: hour} : {});
+          result = await fetchLeg(from, to, date, {depHour});
         } catch (error) {
           if (error.code === 'FLYAI_RATE_LIMIT') {
-            retryAt = new Date(now().getTime() + 5 * 60000).toISOString();
-            if (pendingWrites) await persist();
+            const nowDate = now();
+            retryAt = new Date(nowDate.getTime() + 5 * 60000).toISOString();
+            store.recordAttempt(runId, batch, leg, 'rate_limited', nowDate.toISOString());
+            store.finishRun(runId, 'paused', nowDate.toISOString(), retryAt);
             return;
           }
         }
-        if (result) {
-          state.legs[key] ??= {};
-          state.legs[key][hour] = {day: batch, result};
-          state.updatedAt = now().toISOString();
-          pendingWrites++;
-          if (firstWrite || pendingWrites >= 20) {
-            await persist();
-            pendingWrites = 0;
-            firstWrite = false;
-          }
-        }
+        store.recordAttempt(runId, batch, leg, result ? 'success' : 'failed', now().toISOString(), result);
         progress.done++;
       }
-      state.legs = Object.fromEntries(Object.entries(state.legs).filter(([key]) => key.slice(0, 10) >= schedule.day));
-      state.day = batch;
-      state.coverageKey = coverageKey;
-      await persist();
+      pruneSchedule(schedule.day);
+      store.finishRun(runId, 'complete', now().toISOString());
+    } catch (error) {
+      if (runId) store.finishRun(runId, 'interrupted', now().toISOString());
+      throw error;
     } finally {
       refreshing = false;
     }
   }
 
   async function cachedLeg(from, to, date) {
-    const entries = Object.values(state.legs[legKey(from, to, date)] ?? {});
+    const entries = store.scheduledLegs(from, to, date);
     if (!entries.length) throw Error(refreshing ? '该航线正在采集，请稍后再查缓存' : '该航线或日期暂无缓存报价');
-    entries.sort((a, b) => b.result.collectedAt.localeCompare(a.result.collectedAt));
     const flights = new Map();
-    for (const {result} of entries) {
+    for (const result of entries) {
       for (const flight of result.flights) {
         const key = [flight.number, flight.depAirportCode, flight.arrAirportCode, flight.departureTime].join('/');
         if (!flights.has(key)) flights.set(key, flight);
       }
     }
-    return {...entries.at(-1).result, flights: [...flights.values()]};
+    return {...entries.at(-1), flights: [...flights.values()]};
   }
 
-  const status = () => ({refreshing, progress, retryAt, updatedAt: state.updatedAt, dates: cacheSchedule(now()).outbound});
+  const status = () => {
+    const run = store.latestRun();
+    return {refreshing, progress, retryAt, updatedAt:store.lastFlightWrite(), dates:cacheSchedule(now()).outbound,
+      lastBatch:run && {batch:run.batch, status:run.status, total:run.planned, outcomes:run.outcomes}};
+  };
   return {
     refresh,
     status,
+    close() { if (!database) store.close(); },
     async search(query) {
       await temporary.sweep();
       const schedule = cacheSchedule(now());
@@ -158,16 +141,12 @@ export async function openFareCache(file, {fetchLeg = collect, now = () => new D
         returnDate(query.outDate) === query.backDate;
       let usedOnDemand = false;
       const lookup = (from, to, date, filter) => {
-        const entries = state.legs[legKey(from, to, date)];
-        const hasCoverage = entries && Object.keys(entries).some(hour =>
-          filter.depHour === undefined || Number(hour) <= filter.depHour);
-        if (!canFetch || hasCoverage) return cachedLeg(from, to, date);
+        if (!canFetch || store.covers(from, to, date, filter.depHour)) return cachedLeg(from, to, date);
         usedOnDemand = true;
         return temporary.get(from, to, date, filter).catch(error => {
-          if (entries) return cachedLeg(from, to, date);
+          if (store.covers(from, to, date)) return cachedLeg(from, to, date);
           throw error;
-        });
-      };
+        });      };
       const results = Object.fromEntries([...new Set(query.destinations)].filter(city =>
         Object.hasOwn(originAirports, query.origin) && city !== query.origin && Object.hasOwn(destinationAirports, city))
         .map(city => [city, {city, status: 'queued'}]));
@@ -178,8 +157,11 @@ export async function openFareCache(file, {fetchLeg = collect, now = () => new D
         if (item.inbound && item.outbound) {
           item.collectedAt = [item.inbound.collectedAt, item.outbound.collectedAt].sort()[0];
         }
-        for (const leg of [item.inbound, item.outbound]) {
-          if (leg?.temporaryExpiresAt) expirations.push(leg.temporaryExpiresAt);
+        const expiresAt = [item.inbound?.temporaryExpiresAt, item.outbound?.temporaryExpiresAt]
+          .filter(Boolean).sort()[0];
+        if (expiresAt) {
+          item.temporaryExpiresAt = expiresAt;
+          expirations.push(expiresAt);
         }
         delete item.outbound;
         delete item.inbound;
