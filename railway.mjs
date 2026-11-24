@@ -96,10 +96,11 @@ async function fetchRailTrains(context, from, to, date) {
   }
 }
 
-async function getLeg(store, fetchContext, fetchRailLeg, clock, from, to, date) {
+async function getLeg(store, fetchContext, fetchRailLeg, clock, from, to, date, cacheOnly) {
   const leg = {mode:'rail', scope:'temporary', from, to, date};
   const cached = store.getLeg(leg, clock().toISOString());
   if (cached) return cached;
+  if (cacheOnly) throw Error('该线路或日期暂无完整的高铁缓存报价');
   if (retryAt > Date.now()) throw waitError();
   if (!pendingByDatabase.has(store)) pendingByDatabase.set(store, new Map());
   const pending = pendingByDatabase.get(store);
@@ -142,7 +143,14 @@ export async function searchRail(query, now = new Date(), {
     return context;
   })());
   let directory;
-  try { directory = store.railDirectory() ?? await fetchContext(); } catch { throw waitError(); }
+  try {
+    directory = store.railDirectory();
+    if (!directory && !query.cacheOnly) directory = await fetchContext();
+  } catch { throw waitError(); }
+  if (!directory) {
+    for (const result of Object.values(results)) Object.assign(result, {status:'error', message:'暂无高铁缓存报价'});
+    return {status:'complete', query, results};
+  }
   const from = directory.cities[query.origin];
   if (!from) throw Error('12306 站点列表没有匹配到出发城市。');
   const cities = Object.keys(results);
@@ -160,12 +168,12 @@ export async function searchRail(query, now = new Date(), {
         continue;
       }
       try {
-        const out = await getLeg(store, fetchContext, fetchRailLeg, clock, from, to, query.outDate);
+        const out = await getLeg(store, fetchContext, fetchRailLeg, clock, from, to, query.outDate, query.cacheOnly);
         if (!out.trains.some(train => train.departureTime >= query.earliest)) {
           Object.assign(result, {status:'no_match', message:'去程没有符合时间且有二等座报价的直达车次'});
           continue;
         }
-        const back = await getLeg(store, fetchContext, fetchRailLeg, clock, to, from, query.backDate);
+        const back = await getLeg(store, fetchContext, fetchRailLeg, clock, to, from, query.backDate, query.cacheOnly);
         const options = railPlans(out.trains, back.trains, query);
         Object.assign(result, {status:options.length ? 'success' : 'no_match', options,
           collectedAt:[out.collectedAt, back.collectedAt].sort()[0],

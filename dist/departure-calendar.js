@@ -13,7 +13,9 @@ const dateLabel = new Intl.DateTimeFormat('zh-CN', {month: 'long', day: 'numeric
 let month;
 
 export function syncDepartureCalendar() {
-  document.querySelector('#departure-display').textContent = field.value.replaceAll('-', '/') || '选择日期';
+  document.querySelector('#departure-display').textContent = field.value
+    ? dateLabel.format(dateAtNoon(field.value))
+    : '选择日期';
 }
 
 function showMonth() {

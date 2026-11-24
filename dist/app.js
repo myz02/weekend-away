@@ -11,6 +11,15 @@ const destinations=[
 {id:'qingdao',city:'青岛',code:'TAO',region:'山东 · 红瓦与海',desc:'走过红瓦绿树，听一下午的海。',tags:['海边','城市'],price:1190,duration:180,out:'19:15',back:'21:50',direct:true,score:84,sky:'#c9dee3',sun:'#f3d5a8',land:'#94b3b0',symbol:'⌂',plan:['周六｜老城区散步，在海边看日落','周日｜找家咖啡店坐坐，慢慢收拾返程']}];
 const codes={深圳:'SZX',上海:'SHA',北京:'BJS',广州:'CAN',杭州:'HGH',成都:'CTU'};
 function read(key,fallback){try{return JSON.parse(localStorage.getItem(key))??fallback}catch{return fallback}}
+const originField = $('#origin');
+const originPreferenceKey = 'weekend-last-origin';
+const rememberedOrigin = read(originPreferenceKey, null);
+if ([...originField.options].some(option => option.value === rememberedOrigin)) {
+  originField.value = rememberedOrigin;
+}
+originField.addEventListener('change', () => {
+  try { localStorage.setItem(originPreferenceKey, JSON.stringify(originField.value)); } catch {}
+});
 let favorites=read('weekend-favorites',[]);if(!Array.isArray(favorites))favorites=[];
 let tag='全部',onlySaved=false;
 function persist(){try{localStorage.setItem('weekend-favorites',JSON.stringify(favorites));return true}catch{toast('浏览器存储不可用');return false}}

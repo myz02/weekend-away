@@ -1,4 +1,5 @@
 import {openFareCache} from './fare-cache.mjs';
+import {collectTongcheng} from './tongcheng.mjs';
 import {destinationAirports, resolveRoundTripBooking, roundTripSearchUrl} from './live.mjs';
 import {searchRail} from './railway.mjs';
 import {openDatabase} from './database.mjs';
@@ -14,7 +15,7 @@ const databaseFile = fileURLToPath(new URL('./.fare-cache/weekend.sqlite', impor
 const validTime = value => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 const contentTypes = {'.html':'text/html; charset=utf-8', '.css':'text/css',
-  '.js':'text/javascript', '.webp':'image/webp'};
+  '.js':'text/javascript', '.webp':'image/webp', '.svg':'image/svg+xml'};
 
 function json(res, status, data) {
   res.writeHead(status, {'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store'});
@@ -59,13 +60,13 @@ function validSearch(query) {
 
 export async function createWeekendServer({
   dbPath = process.env.WEEKEND_DATABASE_PATH || databaseFile,
-  legacyFlightFile = cacheFile, now = () => new Date(), fetchLeg,
+  legacyFlightFile = cacheFile, now = () => new Date(), fetchLeg, fetchAlternateLeg,
 } = {}) {
   const database = await openDatabase(dbPath, {legacyFlightFile, now});
   let fares;
   try {
     database.seedCatalog();
-    fares = await openFareCache(legacyFlightFile, {database, now, fetchLeg});
+    fares = await openFareCache(legacyFlightFile, {database, now, fetchLeg, fetchAlternateLeg});
   } catch (error) {
     database.close();
     throw error;
@@ -134,7 +135,7 @@ export async function createWeekendServer({
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const {server, refresh} = await createWeekendServer();
+  const {server, refresh} = await createWeekendServer({fetchAlternateLeg:collectTongcheng});
   const refreshFares = () => refresh().catch(error => console.error('票价缓存采集失败', error));
   server.listen(4173, '127.0.0.1', () => {
     console.log('Local: http://127.0.0.1:4173 · SQLite 票价缓存');

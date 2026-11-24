@@ -48,9 +48,10 @@ function coverage(outbound) {
   return [...calls.values()];
 }
 
-export async function openFareCache(file, {fetchLeg = collect, now = () => new Date(), database} = {}) {
+export async function openFareCache(file, {fetchLeg = collect, fetchAlternateLeg, now = () => new Date(), database} = {}) {
   const store = database ?? await openDatabase(file + '.sqlite', {legacyFlightFile: file, now});
   const temporary = openTemporaryFares(store, fetchLeg, now);
+  const alternate = fetchAlternateLeg && openTemporaryFares(store, fetchAlternateLeg, now, 'tongcheng');
   let refreshing = false;
   let progress = null;
   const started = store.latestRun();
@@ -141,17 +142,30 @@ export async function openFareCache(file, {fetchLeg = collect, now = () => new D
         returnDate(query.outDate) === query.backDate;
       let usedOnDemand = false;
       const lookup = (from, to, date, filter) => {
-        if (!canFetch || store.covers(from, to, date, filter.depHour)) return cachedLeg(from, to, date);
+        if (store.covers(from, to, date, filter.depHour)) return cachedLeg(from, to, date);
+        if (query.cacheOnly) {
+          const cached = temporary.read(from, to, date, filter);
+          if (cached) return cached;
+          throw Error('该航线或日期暂无完整缓存报价');
+        }
+        if (!canFetch) return cachedLeg(from, to, date);
         usedOnDemand = true;
         return temporary.get(from, to, date, filter).catch(error => {
           if (store.covers(from, to, date)) return cachedLeg(from, to, date);
           throw error;
-        });      };
+        });
+      };
       const results = Object.fromEntries([...new Set(query.destinations)].filter(city =>
         Object.hasOwn(originAirports, query.origin) && city !== query.origin && Object.hasOwn(destinationAirports, city))
         .map(city => [city, {city, status: 'queued'}]));
       const job = {status: 'queued', query: {...query, destinations: Object.keys(results)}, completed: 0, results};
-      await runSearchBatch(job, {fetchLeg: lookup});
+      const lookupAlternate = alternate && ((from, to, date) => {
+        if (canFetch) return alternate.get(from, to, date, {});
+        const cached = alternate.read(from, to, date, {});
+        if (!cached) throw Error('暂无同程缓存报价');
+        return cached;
+      });
+      await runSearchBatch(job, {fetchLeg:lookup, fetchAlternateLeg:lookupAlternate});
       const expirations = [];
       for (const item of Object.values(results)) {
         if (item.inbound && item.outbound) {
@@ -166,7 +180,7 @@ export async function openFareCache(file, {fetchLeg = collect, now = () => new D
         delete item.outbound;
         delete item.inbound;
       }
-      const temporaryExpiresAt = usedOnDemand ? expirations.sort()[0] ?? nextShanghaiNoon(now()) : null;
+      const temporaryExpiresAt = expirations.sort()[0] ?? (usedOnDemand ? nextShanghaiNoon(now()) : null);
       return {...job, cache: status(), temporaryExpiresAt};
     },
   };

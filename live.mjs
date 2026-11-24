@@ -1,5 +1,6 @@
 import {spaceRequestStarts} from './request-spacing.mjs';
-import {destinations, originAirports} from './dist/destinations.js';
+import {places, searchUrl, roundTripSearchUrl} from './dist/flight-links.js';
+export {destinationAirports, places, searchUrl, roundTripSearchUrl} from './dist/flight-links.js';
 import {keepWeekendOptions} from './dist/weekend-window.js';
 import { estimateDomesticFees, roundMoney } from './fees.mjs';
 import {execFile} from 'node:child_process';import {promisify} from 'node:util';import {fileURLToPath} from 'node:url';
@@ -24,28 +25,12 @@ function quoteError(error) {
   return Error(friendlyError(error));
 }
 export function friendlyError(error){const text=String(error?.stderr||error?.message||error);if(/429|rate limit|risk control|限流/i.test(text))return '飞猪体验通道请求较频繁，请稍后重新查询；其他成功报价已保留';if(/401|403|api.?key|unauthorized/i.test(text))return '飞猪体验通道要求授权，本次未取得价格';if(/timeout|timed out|ETIMEDOUT/i.test(text))return '飞猪查询超时，请稍后重试';return '飞猪暂未返回可用报价，请稍后重试或在飞猪核价'}
-export const destinationAirports = Object.fromEntries(destinations.filter(city => city.airport).map(city => [city.city, city.airport]));
-export const places = {...originAirports, ...destinationAirports};
 // These destinations are marketed under a regional name or served by a nearby city.
 const airportSearchCities = new Set(['金华', '嘉兴', '西双版纳', '香格里拉', '九寨沟', '潮汕', '呼伦贝尔', '长白山']);
 const flyQuery = city => airportSearchCities.has(city) ? places[city] : city;
 const matchesCity = (city, returnedName, station) => airportSearchCities.has(city)
   ? station === places[city]
   : returnedName === city;
-const flightSearchPage = 'https://sjipiao.fliggy.com/flight_search_result.htm?';
-export function searchUrl(origin, destination, date) {
-  return flightSearchPage + new URLSearchParams({
-    tripType: '0', depCity: places[origin], arrCity: places[destination],
-    depDate: date, depCityName: origin, arrCityName: destination,
-  });
-}
-
-export function roundTripSearchUrl(origin, destination, outDate, backDate) {
-  return flightSearchPage + new URLSearchParams({
-    tripType: '1', depCity: places[origin], arrCity: places[destination],
-    depCityName: origin, arrCityName: destination, depDate: outDate, arrDate: backDate,
-  });
-}
 export function normalizeItems(items, { origin, destination, date, url, collectedAt = new Date() }) {
   const flights = [];
   for (const item of items) {

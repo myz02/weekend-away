@@ -5,13 +5,15 @@ export function nextShanghaiNoon(now) {
   return noon.toISOString();
 }
 
-export function openTemporaryFares(store, fetchLeg, now) {
+export function openTemporaryFares(store, fetchLeg, now, scope = 'temporary') {
   const pending = new Map();
+  const legFor = (from, to, date, {depHour, arrHour}) =>
+    ({mode:'flight', scope, from, to, date, depHour, arrHour});
+  const readLeg = leg => store.getLeg(leg, now().toISOString());
 
   async function get(from, to, date, filter) {
-    const {depHour, arrHour} = filter;
-    const leg = {mode:'flight', scope:'temporary', from, to, date, depHour, arrHour};
-    const stored = store.getLeg(leg, now().toISOString());
+    const leg = legFor(from, to, date, filter);
+    const stored = readLeg(leg);
     if (stored) return stored;
     const key = JSON.stringify(leg);
     if (!pending.has(key)) {
@@ -27,5 +29,6 @@ export function openTemporaryFares(store, fetchLeg, now) {
     return pending.get(key);
   }
 
-  return {get, sweep: () => store.sweepExpired(now().toISOString())};
+  return {get, read: (from, to, date, filter) => readLeg(legFor(from, to, date, filter)),
+    sweep: () => store.sweepExpired(now().toISOString())};
 }

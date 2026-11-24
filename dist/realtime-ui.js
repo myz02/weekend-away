@@ -15,7 +15,8 @@ const money = amount => '¥' + amount.toLocaleString('zh-CN', {maximumFractionDi
 function chooseHeroDestination() {
   let previous;
   try { previous = sessionStorage.getItem('weekend-hero'); } catch {}
-  const choices = cities.filter(city => city.hasPhoto && city.id !== previous);
+  const panoramas = ['guilin', 'chongqing', 'qingdao', 'nanning', 'xiamen'];
+  const choices = cities.filter(city => city.hasPhoto && panoramas.includes(city.id) && city.id !== previous);
   const destination = choices[Math.floor(Math.random() * choices.length)];
   const image = $('.hero-image');
   const label = destination.city + ' · ' + destination.photoSubject;
@@ -139,13 +140,9 @@ function createQuote(city, quote) {
     make('b', 'quote-price', money(plan.total)),
     make('small', 'quote-caption', (mode === 'rail' ? '二等座往返' : plan.estimated ? '往返含费估算' : '往返含费')
       + (stale ? ' · 旧报价' : '')),
-    make('small', 'quote-caption', `周日 ${plan.inbound.arrivalTime} 抵达`),
   );
   if (timing) {
-    quoteBox.append(
-      make('small', 'quote-caption', `预计 ${weekendClock(timing.arrivalInTown)} 到市区`),
-      make('small', 'quote-play', `预计可玩 ${playTime(timing.usableMinutes)}`),
-    );
+    quoteBox.append(make('small', 'quote-play', `可玩约 ${playTime(timing.usableMinutes)}`));
   }
   return quoteBox;
 }
@@ -176,7 +173,7 @@ function createCard(city, quotes) {
   };
   art.append(make('span', 'art-tag', city.hasPhoto ? city.photoSubject : city.landmark), favorite);
   const body = make('div', 'card-body');
-  body.append(make('h3', '', city.city), make('p', 'city-caption', city.caption));
+  body.append(make('h3', '', city.city));
   const guide = cityGuides[city.id];
   if (quotes.length) {
     const comparison = make('div', 'transport-quotes');
@@ -184,7 +181,7 @@ function createCard(city, quotes) {
     body.append(comparison);
   }
   if (guide || quotes.some(quote => quote.plans.length)) {
-    const label = '查看城市详情 ↗';
+    const label = '看行程 ↗';
     const button = make('button', 'detail', label);
     button.type = 'button';
     button.setAttribute('aria-label', `${label.replace(' ↗', '')}：${city.city}`);
@@ -199,6 +196,11 @@ function createCard(city, quotes) {
 
 function render() {
   syncDepartureCalendar();
+  const earliest = $('#earliest').value;
+  const returnEarliest = $('#return-earliest').value;
+  const latest = $('#return-latest').value;
+  $('#time-preferences-value').textContent = [earliest && `去 ${earliest} 后`,
+    returnEarliest && `回 ${returnEarliest} 后`, latest && `${latest} 前抵达`].filter(Boolean).join(' · ');
   for (const [mode, source] of Object.entries(job?.sources ?? {})) {
     const expired = new Set();
     for (const [city, result] of Object.entries(source.results)) {
@@ -235,13 +237,14 @@ function render() {
   $('#fav-count').textContent = favorites.length;
   $('#sort').hidden = !job;
   if (!busy) {
-    $('.search-submit').textContent = $('#city-search').value.trim() ? '查询匹配目的地 ↗' : '查询全部目的地 ↗';
+    $('.search-submit').textContent = '查往返报价';
   }
-  $('#section-title').textContent = saved ? '收藏目的地' : filtered ? '预算内目的地' : '这周末，去这里';
+  $('#section-title').textContent = saved ? '收藏目的地' : filtered ? '预算内目的地' : '目的地';
   const date = $('#departure').value;
-  const dateRange = date ? date + ' — ' + returnDate(date) : '请选择出发日期';
+  const shortDate = value => value.slice(5).replace('-', '/');
+  const dateRange = date ? shortDate(date) + '–' + shortDate(returnDate(date)) : '请选择出发日期';
   const progress = filtered ? `${entries.length} 个目的地有 ${money(appliedBudget)} 内的往返报价`
-    : job ? '已载入机票缓存 · 点击查询获取完整结果' : `浏览 ${entries.length} 个目的地 · 点击查询往返报价`;
+    : `${entries.length} 个目的地`;
   $('#result-summary').textContent = `${origin}出发 · ${dateRange} · ${progress}`;
   $('#cards').replaceChildren(...entries.map(({city, quotes}) => createCard(city, quotes)));
   otherCities.hidden = !others.length;
@@ -795,9 +798,9 @@ try {
 
 try {
   const previous = JSON.parse(localStorage.getItem('weekend-last-cache'));
-  if (previous?.status === 'complete' && previous.query?.returnEarliest && coveredDates.includes(previous.query.outDate)) {
+  if (previous?.status === 'complete' && previous.query?.returnEarliest &&
+      previous.query.origin === $('#origin').value && coveredDates.includes(previous.query.outDate)) {
     const {query} = previous;
-    $('#origin').value = query.origin;
     const day = new Date(query.outDate + 'T12:00:00').getDay();
     $('#departure-day').value = String(day);
     $('#departure').min = weekend(new Date(), day);
